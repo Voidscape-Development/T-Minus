@@ -282,6 +282,12 @@ void TimerWidget::UnregisterHotkeys()
 	}
 }
 
+void TimerWidget::Quiesce()
+{
+	m_engine->stop();
+	m_actionExecutor->cancel();
+}
+
 void TimerWidget::SaveData(obs_data_t *obj)
 {
 	obs_data_set_string(obj, "timerId", m_data.timerId.toUtf8().constData());

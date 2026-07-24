@@ -27,6 +27,11 @@ public:
 	void ReregisterAllHotkeys();
 	void UnregisterHotkeys();
 
+	// Stop the tick timer and cancel any in-progress end-action sequence.
+	// Called before deleteLater() so a queued QTimer tick can't drive OBS
+	// mutations against a widget that's about to be destroyed.
+	void Quiesce();
+
 	void StartTimer();
 	void PauseTimer();
 	void ToggleStartPause();
