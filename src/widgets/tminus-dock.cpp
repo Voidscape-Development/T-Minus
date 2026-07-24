@@ -325,8 +325,19 @@ void TMinusDock::LoadSavedSettings()
 void TMinusDock::ClearTimers()
 {
 	for (auto *timer : m_timers) {
-		// Unregister synchronously; deleteLater defers destruction
-		// until after the new collection's timers are created.
+		// Halt everything before deleteLater: with destruction deferred
+		// until after the new collection's timers are created, a still-
+		// active tick timer or end-action executor on the old widget
+		// would otherwise fire during the transition and drive OBS
+		// mutations (scene switches, hotkey triggers, source text
+		// updates) on behalf of a widget that no longer represents live
+		// state.
+		timer->StopAll();
+		// Detach outgoing signals (settingsChanged, removeRequested,
+		// moveRequested) so a queued emission can't invoke SaveSettings
+		// or list mutations against the fresh m_timers we're about to
+		// populate.
+		timer->disconnect();
 		timer->UnregisterHotkeys();
 		m_timerListLayout->removeWidget(timer);
 		timer->deleteLater();

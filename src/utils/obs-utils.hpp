@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -22,6 +23,11 @@ struct RegisterHotkeyCallbackData {
 	QPointer<QObject> context;
 };
 
+// Protects both g_hotkeyCallbackDataMap and every RegisterHotkeyCallbackData
+// it stores. libobs dispatches hotkey callbacks on its own thread, so a
+// scene-collection switch that tears down callback data on the UI thread
+// would otherwise race with an in-flight callback reading that data.
+extern std::mutex g_hotkeyMutex;
 extern std::unordered_map<int, RegisterHotkeyCallbackData *> g_hotkeyCallbackDataMap;
 
 void LoadHotkey(int &id, const char *name, const char *description, QObject *context, std::function<void()> function,
