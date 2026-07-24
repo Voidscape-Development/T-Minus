@@ -282,7 +282,7 @@ void TimerWidget::UnregisterHotkeys()
 	}
 }
 
-void TimerWidget::Quiesce()
+void TimerWidget::StopAll()
 {
 	m_engine->stop();
 	m_actionExecutor->cancel();
