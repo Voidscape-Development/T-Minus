@@ -53,6 +53,7 @@ function Package {
         ErrorAction = 'SilentlyContinue'
         Path = @(
             "${ProjectRoot}/release/${ProductName}-*-windows-*.zip"
+            "${ProjectRoot}/release-portable/${ProductName}-*-windows-*.zip"
         )
     }
 
@@ -66,6 +67,36 @@ function Package {
         Verbose = ($Env:CI -ne $null)
     }
     Compress-Archive -Force @CompressArgs
+    Log-Group
+
+    Log-Group "Archiving portable ${ProductName}..."
+    $InstallRoot = "${ProjectRoot}/release/${Configuration}/${ProductName}"
+    $PortableRoot = "${ProjectRoot}/release-portable/${ProductName}"
+
+    if ( ! ( Test-Path -Path "${InstallRoot}/bin/64bit" ) ) {
+        throw "No packaged binaries found at ${InstallRoot}/bin/64bit"
+    }
+
+    if ( Test-Path -Path $PortableRoot ) {
+        Remove-Item -Path $PortableRoot -Recurse -Force
+    }
+
+    New-Item -ItemType Directory -Path "${PortableRoot}/obs-plugins/64bit" -Force | Out-Null
+    New-Item -ItemType Directory -Path "${PortableRoot}/data/obs-plugins/${ProductName}" -Force | Out-Null
+
+    Copy-Item -Path "${InstallRoot}/bin/64bit/*" -Destination "${PortableRoot}/obs-plugins/64bit" -Recurse -Force
+
+    if ( Test-Path -Path "${InstallRoot}/data" ) {
+        Copy-Item -Path "${InstallRoot}/data/*" -Destination "${PortableRoot}/data/obs-plugins/${ProductName}" -Recurse -Force
+    }
+
+    $PortableCompressArgs = @{
+        Path = "${PortableRoot}/*"
+        CompressionLevel = 'Optimal'
+        DestinationPath = "${ProjectRoot}/release-portable/${OutputName}-Portable.zip"
+        Verbose = ($Env:CI -ne $null)
+    }
+    Compress-Archive -Force @PortableCompressArgs
     Log-Group
 }
 
