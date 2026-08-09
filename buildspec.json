@@ -33,7 +33,7 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.eion.t-minus"
+            "bundleId": "dev.voidscape.t-minus"
         }
     },
     "name": "t-minus",
@@ -41,5 +41,5 @@
     "version": "1.0.0",
     "author": "Eion",
     "website": "https://github.com/Eion/t-minus",
-    "email": ""
+    "email": "me@example.com"
 }
