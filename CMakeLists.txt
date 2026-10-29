@@ -52,11 +52,13 @@ target_sources(
     src/widgets/tminus-dock.cpp
     src/widgets/timer-widget.hpp
     src/widgets/timer-widget.cpp
-    src/widgets/timer-widget.ui
     src/widgets/timer-settings-dialog.hpp
     src/widgets/timer-settings-dialog.cpp
     src/widgets/action-list-widget.hpp
     src/widgets/action-list-widget.cpp
+    src/widgets/drag-reorder.hpp
+    src/widgets/drag-reorder.cpp
+    src/widgets/button-style.hpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

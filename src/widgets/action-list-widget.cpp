@@ -1,18 +1,22 @@
 #include "action-list-widget.hpp"
+#include "drag-reorder.hpp"
+#include "button-style.hpp"
 
 #include <obs.h>
 #include <obs-frontend-api.h>
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
-#include <QLabel>
+#include <QMenu>
+#include <QScrollArea>
+#include <QStyle>
+#include <QTimer>
+
+namespace {
 
 // The hotkey combos display the translated hotkey description
 // (obs_hotkey_get_description) while carrying the registration name in the
 // item data; the registration name is what gets saved and triggered.
 
-static QString HotkeyComboValue(const QComboBox *combo)
+QString HotkeyComboValue(const QComboBox *combo)
 {
 	int idx = combo->currentIndex();
 	if (idx >= 0 && combo->currentText() == combo->itemText(idx))
@@ -21,16 +25,20 @@ static QString HotkeyComboValue(const QComboBox *combo)
 	return combo->currentText();
 }
 
-static void SetHotkeyComboValue(QComboBox *combo, const QString &name)
+// Returns false when name isn't a registered hotkey right now; it is then
+// kept as typed text so the step still saves it.
+bool SetHotkeyComboValue(QComboBox *combo, const QString &name)
 {
 	int idx = combo->findData(name);
-	if (idx >= 0)
+	if (idx >= 0) {
 		combo->setCurrentIndex(idx);
-	else
-		combo->setEditText(name);
+		return true;
+	}
+	combo->setEditText(name);
+	return false;
 }
 
-static void AddHotkeyComboItem(QComboBox *combo, obs_hotkey_t *hotkey)
+void AddHotkeyComboItem(QComboBox *combo, obs_hotkey_t *hotkey)
 {
 	const char *name = obs_hotkey_get_name(hotkey);
 	if (!name || !name[0])
@@ -39,432 +47,46 @@ static void AddHotkeyComboItem(QComboBox *combo, obs_hotkey_t *hotkey)
 	combo->addItem((desc && desc[0]) ? QString::fromUtf8(desc) : QString::fromUtf8(name), QString::fromUtf8(name));
 }
 
-// Translated description for a saved registration name, for display in the
-// action list; falls back to the name when the hotkey isn't registered right
-// now (e.g. its timer or source lives in another scene collection).
-static QString HotkeyDisplayName(const QString &name)
+void PopulateScenes(QComboBox *combo)
 {
-	if (name.isEmpty())
-		return name;
+	combo->clear();
+	struct obs_frontend_source_list sceneList = {};
+	obs_frontend_get_scenes(&sceneList);
+	for (size_t i = 0; i < sceneList.sources.num; i++) {
+		const char *name = obs_source_get_name(sceneList.sources.array[i]);
+		if (name)
+			combo->addItem(QString::fromUtf8(name));
+	}
+	obs_frontend_source_list_free(&sceneList);
+}
 
-	struct Search {
-		QByteArray target;
-		QString description;
-	} search = {name.toUtf8(), QString()};
-
-	obs_enum_hotkeys(
-		[](void *data, obs_hotkey_id, obs_hotkey_t *hotkey) -> bool {
-			auto *search = static_cast<Search *>(data);
-			const char *hkName = obs_hotkey_get_name(hotkey);
-			if (!hkName || search->target != hkName)
-				return true;
-			const char *desc = obs_hotkey_get_description(hotkey);
-			if (desc && desc[0])
-				search->description = QString::fromUtf8(desc);
-			return false;
+// Every source plus the scenes (which can carry filters and hotkeys too)
+void PopulateSources(QComboBox *combo)
+{
+	combo->clear();
+	obs_enum_sources(
+		[](void *data, obs_source_t *source) -> bool {
+			auto *combo = static_cast<QComboBox *>(data);
+			const char *name = obs_source_get_name(source);
+			if (name && name[0])
+				combo->addItem(QString::fromUtf8(name));
+			return true;
 		},
-		&search);
+		combo);
 
-	return search.description.isEmpty() ? name : search.description;
-}
-
-ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
-{
-	SetupUI();
-	SetupEditForms();
-}
-
-void ActionListWidget::SetupUI()
-{
-	auto *mainLayout = new QVBoxLayout(this);
-	mainLayout->setContentsMargins(0, 0, 0, 0);
-
-	m_listWidget = new QListWidget(this);
-	m_listWidget->setMaximumHeight(150);
-	mainLayout->addWidget(m_listWidget);
-
-	// Buttons row
-	auto *btnRow = new QHBoxLayout();
-
-	m_addBtn = new QPushButton("Add", this);
-	m_removeBtn = new QPushButton("Remove", this);
-	m_moveUpBtn = new QPushButton("Up", this);
-	m_moveDownBtn = new QPushButton("Down", this);
-
-	btnRow->addWidget(m_addBtn);
-	btnRow->addWidget(m_removeBtn);
-	btnRow->addStretch();
-	btnRow->addWidget(m_moveUpBtn);
-	btnRow->addWidget(m_moveDownBtn);
-	mainLayout->addLayout(btnRow);
-
-	// Type selector
-	auto *typeRow = new QHBoxLayout();
-	typeRow->addWidget(new QLabel("Type:", this));
-	m_typeCombo = new QComboBox(this);
-	m_typeCombo->addItem("Set Text", static_cast<int>(ActionType::SetText));
-	m_typeCombo->addItem("Enable/Disable Filter", static_cast<int>(ActionType::EnableFilter));
-	m_typeCombo->addItem("Switch Scene", static_cast<int>(ActionType::SwitchScene));
-	m_typeCombo->addItem("Delay", static_cast<int>(ActionType::Delay));
-	m_typeCombo->addItem("Trigger Global Hotkey", static_cast<int>(ActionType::TriggerGlobalHotkey));
-	m_typeCombo->addItem("Trigger Source Hotkey", static_cast<int>(ActionType::TriggerSourceHotkey));
-	typeRow->addWidget(m_typeCombo);
-	mainLayout->addLayout(typeRow);
-
-	// Stacked edit forms
-	m_editStack = new QStackedWidget(this);
-	mainLayout->addWidget(m_editStack);
-
-	// Connections
-	connect(m_addBtn, &QPushButton::clicked, this, &ActionListWidget::OnAddAction);
-	connect(m_removeBtn, &QPushButton::clicked, this, &ActionListWidget::OnRemoveAction);
-	connect(m_moveUpBtn, &QPushButton::clicked, this, &ActionListWidget::OnMoveUp);
-	connect(m_moveDownBtn, &QPushButton::clicked, this, &ActionListWidget::OnMoveDown);
-	connect(m_listWidget, &QListWidget::currentRowChanged, this, &ActionListWidget::OnSelectionChanged);
-	connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-		&ActionListWidget::OnTypeChanged);
-}
-
-void ActionListWidget::SetupEditForms()
-{
-	// Page 0: SetText
-	auto *setTextPage = new QWidget();
-	auto *setTextLayout = new QVBoxLayout(setTextPage);
-	setTextLayout->setContentsMargins(0, 4, 0, 0);
-	setTextLayout->addWidget(new QLabel("Text:"));
-	m_setTextEdit = new QLineEdit();
-	m_setTextEdit->setPlaceholderText("Text to display (supports %time%)");
-	setTextLayout->addWidget(m_setTextEdit);
-	m_editStack->addWidget(setTextPage);
-
-	connect(m_setTextEdit, &QLineEdit::textChanged, this, &ActionListWidget::OnEditFieldChanged);
-
-	// Page 1: EnableFilter
-	auto *filterPage = new QWidget();
-	auto *filterLayout = new QVBoxLayout(filterPage);
-	filterLayout->setContentsMargins(0, 4, 0, 0);
-	filterLayout->addWidget(new QLabel("Source:"));
-	m_filterSourceCombo = new QComboBox();
-	filterLayout->addWidget(m_filterSourceCombo);
-	filterLayout->addWidget(new QLabel("Filter:"));
-	m_filterNameCombo = new QComboBox();
-	filterLayout->addWidget(m_filterNameCombo);
-	m_filterEnabledCheck = new QCheckBox("Enable filter (uncheck to disable)");
-	m_filterEnabledCheck->setChecked(true);
-	filterLayout->addWidget(m_filterEnabledCheck);
-	m_editStack->addWidget(filterPage);
-
-	connect(m_filterSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-		PopulateFilterDropdown(m_filterSourceCombo->currentText());
-		OnEditFieldChanged();
-	});
-	connect(m_filterNameCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-		&ActionListWidget::OnEditFieldChanged);
-	connect(m_filterEnabledCheck, &QCheckBox::toggled, this, &ActionListWidget::OnEditFieldChanged);
-
-	// Page 2: SwitchScene
-	auto *scenePage = new QWidget();
-	auto *sceneLayout = new QVBoxLayout(scenePage);
-	sceneLayout->setContentsMargins(0, 4, 0, 0);
-	sceneLayout->addWidget(new QLabel("Scene:"));
-	m_sceneCombo = new QComboBox();
-	sceneLayout->addWidget(m_sceneCombo);
-	m_editStack->addWidget(scenePage);
-
-	connect(m_sceneCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-		&ActionListWidget::OnEditFieldChanged);
-
-	// Page 3: Delay
-	auto *delayPage = new QWidget();
-	auto *delayLayout = new QVBoxLayout(delayPage);
-	delayLayout->setContentsMargins(0, 4, 0, 0);
-	delayLayout->addWidget(new QLabel("Delay (milliseconds):"));
-	m_delaySpin = new QSpinBox();
-	m_delaySpin->setRange(100, 300000);
-	m_delaySpin->setSingleStep(500);
-	m_delaySpin->setValue(1000);
-	m_delaySpin->setSuffix(" ms");
-	delayLayout->addWidget(m_delaySpin);
-	m_editStack->addWidget(delayPage);
-
-	connect(m_delaySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ActionListWidget::OnEditFieldChanged);
-
-	// Page 4: TriggerGlobalHotkey
-	auto *globalHkPage = new QWidget();
-	auto *globalHkLayout = new QVBoxLayout(globalHkPage);
-	globalHkLayout->setContentsMargins(0, 4, 0, 0);
-	globalHkLayout->addWidget(new QLabel("Global Hotkey:"));
-	m_globalHotkeyCombo = new QComboBox();
-	m_globalHotkeyCombo->setEditable(true);
-	globalHkLayout->addWidget(m_globalHotkeyCombo);
-	m_editStack->addWidget(globalHkPage);
-
-	connect(m_globalHotkeyCombo, &QComboBox::currentTextChanged, this, &ActionListWidget::OnEditFieldChanged);
-
-	// Page 5: TriggerSourceHotkey
-	auto *srcHkPage = new QWidget();
-	auto *srcHkLayout = new QVBoxLayout(srcHkPage);
-	srcHkLayout->setContentsMargins(0, 4, 0, 0);
-	srcHkLayout->addWidget(new QLabel("Source:"));
-	m_sourceHotkeySourceCombo = new QComboBox();
-	srcHkLayout->addWidget(m_sourceHotkeySourceCombo);
-	srcHkLayout->addWidget(new QLabel("Hotkey:"));
-	m_sourceHotkeyNameCombo = new QComboBox();
-	m_sourceHotkeyNameCombo->setEditable(true);
-	srcHkLayout->addWidget(m_sourceHotkeyNameCombo);
-	m_editStack->addWidget(srcHkPage);
-
-	connect(m_sourceHotkeySourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-		PopulateSourceHotkeyDropdown(m_sourceHotkeySourceCombo->currentText());
-		OnEditFieldChanged();
-	});
-	connect(m_sourceHotkeyNameCombo, &QComboBox::currentTextChanged, this, &ActionListWidget::OnEditFieldChanged);
-}
-
-void ActionListWidget::setActions(const QList<ActionStep> &actions)
-{
-	m_actions = actions;
-	UpdateListDisplay();
-	if (!m_actions.isEmpty()) {
-		m_listWidget->setCurrentRow(0);
+	struct obs_frontend_source_list sceneList = {};
+	obs_frontend_get_scenes(&sceneList);
+	for (size_t i = 0; i < sceneList.sources.num; i++) {
+		const char *name = obs_source_get_name(sceneList.sources.array[i]);
+		if (name && combo->findText(QString::fromUtf8(name)) < 0)
+			combo->addItem(QString::fromUtf8(name));
 	}
+	obs_frontend_source_list_free(&sceneList);
 }
 
-QList<ActionStep> ActionListWidget::actions() const
+void PopulateFilters(QComboBox *combo, const QString &sourceName)
 {
-	return m_actions;
-}
-
-void ActionListWidget::OnAddAction()
-{
-	ActionStep step;
-	step.type = static_cast<ActionType>(m_typeCombo->currentData().toInt());
-	m_actions.append(step);
-	UpdateListDisplay();
-	m_listWidget->setCurrentRow(m_actions.size() - 1);
-}
-
-void ActionListWidget::OnRemoveAction()
-{
-	int row = m_listWidget->currentRow();
-	if (row < 0 || row >= m_actions.size())
-		return;
-
-	m_actions.removeAt(row);
-	UpdateListDisplay();
-
-	if (!m_actions.isEmpty()) {
-		m_listWidget->setCurrentRow(qMin(row, m_actions.size() - 1));
-	}
-}
-
-void ActionListWidget::OnMoveUp()
-{
-	int row = m_listWidget->currentRow();
-	if (row <= 0)
-		return;
-
-	m_actions.swapItemsAt(row, row - 1);
-	UpdateListDisplay();
-	m_listWidget->setCurrentRow(row - 1);
-}
-
-void ActionListWidget::OnMoveDown()
-{
-	int row = m_listWidget->currentRow();
-	if (row < 0 || row >= m_actions.size() - 1)
-		return;
-
-	m_actions.swapItemsAt(row, row + 1);
-	UpdateListDisplay();
-	m_listWidget->setCurrentRow(row + 1);
-}
-
-void ActionListWidget::OnSelectionChanged()
-{
-	int row = m_listWidget->currentRow();
-	if (row >= 0 && row < m_actions.size()) {
-		LoadStepIntoEditor(row);
-	}
-}
-
-void ActionListWidget::OnTypeChanged(int)
-{
-	int row = m_listWidget->currentRow();
-	if (row < 0 || row >= m_actions.size() || m_updatingEditor)
-		return;
-
-	ActionType newType = static_cast<ActionType>(m_typeCombo->currentData().toInt());
-	m_actions[row].type = newType;
-	m_editStack->setCurrentIndex(static_cast<int>(newType));
-	UpdateListDisplay();
-}
-
-void ActionListWidget::OnEditFieldChanged()
-{
-	int row = m_listWidget->currentRow();
-	if (row < 0 || row >= m_actions.size() || m_updatingEditor)
-		return;
-
-	SaveEditorIntoStep(row);
-	UpdateListDisplay();
-}
-
-void ActionListWidget::UpdateListDisplay()
-{
-	int currentRow = m_listWidget->currentRow();
-	m_listWidget->clear();
-
-	for (int i = 0; i < m_actions.size(); i++) {
-		m_listWidget->addItem(QString("%1. %2").arg(i + 1).arg(ActionStepToString(m_actions[i])));
-	}
-
-	if (currentRow >= 0 && currentRow < m_actions.size()) {
-		m_listWidget->setCurrentRow(currentRow);
-	}
-}
-
-void ActionListWidget::LoadStepIntoEditor(int index)
-{
-	m_updatingEditor = true;
-
-	const ActionStep &step = m_actions[index];
-
-	// Set type combo
-	int typeIdx = m_typeCombo->findData(static_cast<int>(step.type));
-	if (typeIdx >= 0)
-		m_typeCombo->setCurrentIndex(typeIdx);
-
-	m_editStack->setCurrentIndex(static_cast<int>(step.type));
-
-	switch (step.type) {
-	case ActionType::SetText:
-		m_setTextEdit->setText(step.text);
-		break;
-
-	case ActionType::EnableFilter:
-		PopulateSourceDropdowns();
-		if (!step.filterSourceName.isEmpty()) {
-			int idx = m_filterSourceCombo->findText(step.filterSourceName);
-			if (idx >= 0)
-				m_filterSourceCombo->setCurrentIndex(idx);
-			PopulateFilterDropdown(step.filterSourceName);
-			idx = m_filterNameCombo->findText(step.filterName);
-			if (idx >= 0)
-				m_filterNameCombo->setCurrentIndex(idx);
-		}
-		m_filterEnabledCheck->setChecked(step.filterEnabled);
-		break;
-
-	case ActionType::SwitchScene:
-		PopulateSceneDropdown();
-		if (!step.sceneName.isEmpty()) {
-			int idx = m_sceneCombo->findText(step.sceneName);
-			if (idx >= 0)
-				m_sceneCombo->setCurrentIndex(idx);
-		}
-		break;
-
-	case ActionType::Delay:
-		m_delaySpin->setValue(step.delayMs);
-		break;
-
-	case ActionType::TriggerGlobalHotkey:
-		PopulateGlobalHotkeyDropdown();
-		if (!step.globalHotkeyName.isEmpty())
-			SetHotkeyComboValue(m_globalHotkeyCombo, step.globalHotkeyName);
-		break;
-
-	case ActionType::TriggerSourceHotkey:
-		PopulateSourceDropdowns();
-		if (!step.sourceHotkeySourceName.isEmpty()) {
-			int idx = m_sourceHotkeySourceCombo->findText(step.sourceHotkeySourceName);
-			if (idx >= 0)
-				m_sourceHotkeySourceCombo->setCurrentIndex(idx);
-			PopulateSourceHotkeyDropdown(step.sourceHotkeySourceName);
-			if (!step.sourceHotkeyName.isEmpty())
-				SetHotkeyComboValue(m_sourceHotkeyNameCombo, step.sourceHotkeyName);
-		}
-		break;
-	}
-
-	m_updatingEditor = false;
-}
-
-void ActionListWidget::SaveEditorIntoStep(int index)
-{
-	ActionStep &step = m_actions[index];
-
-	switch (step.type) {
-	case ActionType::SetText:
-		step.text = m_setTextEdit->text();
-		break;
-
-	case ActionType::EnableFilter:
-		step.filterSourceName = m_filterSourceCombo->currentText();
-		step.filterName = m_filterNameCombo->currentText();
-		step.filterEnabled = m_filterEnabledCheck->isChecked();
-		break;
-
-	case ActionType::SwitchScene:
-		step.sceneName = m_sceneCombo->currentText();
-		break;
-
-	case ActionType::Delay:
-		step.delayMs = m_delaySpin->value();
-		break;
-
-	case ActionType::TriggerGlobalHotkey:
-		step.globalHotkeyName = HotkeyComboValue(m_globalHotkeyCombo);
-		break;
-
-	case ActionType::TriggerSourceHotkey:
-		step.sourceHotkeySourceName = m_sourceHotkeySourceCombo->currentText();
-		step.sourceHotkeyName = HotkeyComboValue(m_sourceHotkeyNameCombo);
-		break;
-	}
-}
-
-void ActionListWidget::PopulateSourceDropdowns()
-{
-	auto populateCombo = [](QComboBox *combo) {
-		QString current = combo->currentText();
-		combo->clear();
-
-		obs_enum_sources(
-			[](void *data, obs_source_t *source) -> bool {
-				auto *combo = static_cast<QComboBox *>(data);
-				const char *name = obs_source_get_name(source);
-				if (name && name[0])
-					combo->addItem(name);
-				return true;
-			},
-			combo);
-
-		// Also add scenes as sources
-		struct obs_frontend_source_list sceneList = {};
-		obs_frontend_get_scenes(&sceneList);
-		for (size_t i = 0; i < sceneList.sources.num; i++) {
-			const char *name = obs_source_get_name(sceneList.sources.array[i]);
-			if (name && combo->findText(name) < 0)
-				combo->addItem(name);
-		}
-		obs_frontend_source_list_free(&sceneList);
-
-		if (!current.isEmpty()) {
-			int idx = combo->findText(current);
-			if (idx >= 0)
-				combo->setCurrentIndex(idx);
-		}
-	};
-
-	populateCombo(m_filterSourceCombo);
-	populateCombo(m_sourceHotkeySourceCombo);
-}
-
-void ActionListWidget::PopulateFilterDropdown(const QString &sourceName)
-{
-	m_filterNameCombo->clear();
+	combo->clear();
 	if (sourceName.isEmpty())
 		return;
 
@@ -475,58 +97,30 @@ void ActionListWidget::PopulateFilterDropdown(const QString &sourceName)
 	obs_source_enum_filters(
 		source,
 		[](obs_source_t *, obs_source_t *filter, void *data) {
-			auto *combo = static_cast<QComboBox *>(data);
-			combo->addItem(obs_source_get_name(filter));
+			static_cast<QComboBox *>(data)->addItem(QString::fromUtf8(obs_source_get_name(filter)));
 		},
-		m_filterNameCombo);
+		combo);
 
 	obs_source_release(source);
 }
 
-void ActionListWidget::PopulateSceneDropdown()
+void PopulateGlobalHotkeys(QComboBox *combo)
 {
-	QString current = m_sceneCombo->currentText();
-	m_sceneCombo->clear();
-
-	struct obs_frontend_source_list sceneList = {};
-	obs_frontend_get_scenes(&sceneList);
-	for (size_t i = 0; i < sceneList.sources.num; i++) {
-		const char *name = obs_source_get_name(sceneList.sources.array[i]);
-		if (name)
-			m_sceneCombo->addItem(name);
-	}
-	obs_frontend_source_list_free(&sceneList);
-
-	if (!current.isEmpty()) {
-		int idx = m_sceneCombo->findText(current);
-		if (idx >= 0)
-			m_sceneCombo->setCurrentIndex(idx);
-	}
-}
-
-void ActionListWidget::PopulateGlobalHotkeyDropdown()
-{
-	QString current = HotkeyComboValue(m_globalHotkeyCombo);
-	m_globalHotkeyCombo->clear();
-
+	combo->clear();
 	obs_enum_hotkeys(
 		[](void *data, obs_hotkey_id, obs_hotkey_t *hotkey) -> bool {
-			auto *combo = static_cast<QComboBox *>(data);
 			// Only frontend-registered hotkeys are global; source
-			// hotkeys are covered by Trigger Source Hotkey.
+			// hotkeys are covered by Press Source Hotkey.
 			if (obs_hotkey_get_registerer_type(hotkey) == OBS_HOTKEY_REGISTERER_FRONTEND)
-				AddHotkeyComboItem(combo, hotkey);
+				AddHotkeyComboItem(static_cast<QComboBox *>(data), hotkey);
 			return true;
 		},
-		m_globalHotkeyCombo);
-
-	if (!current.isEmpty())
-		SetHotkeyComboValue(m_globalHotkeyCombo, current);
+		combo);
 }
 
-void ActionListWidget::PopulateSourceHotkeyDropdown(const QString &sourceName)
+void PopulateSourceHotkeys(QComboBox *combo, const QString &sourceName)
 {
-	m_sourceHotkeyNameCombo->clear();
+	combo->clear();
 	if (sourceName.isEmpty())
 		return;
 
@@ -534,21 +128,16 @@ void ActionListWidget::PopulateSourceHotkeyDropdown(const QString &sourceName)
 	if (!source)
 		return;
 
-	// Enumerate all hotkeys and find ones associated with this source.
 	// Source hotkeys are registered with the source's weak reference as
 	// the registerer, so that is what the comparison has to use.
-	obs_weak_source_t *weak = obs_source_get_weak_source(source);
-
-	struct SourceHotkeyEnumData {
+	struct EnumData {
 		QComboBox *combo;
 		obs_weak_source_t *weak;
-	};
-
-	SourceHotkeyEnumData enumData = {m_sourceHotkeyNameCombo, weak};
+	} enumData = {combo, obs_source_get_weak_source(source)};
 
 	obs_enum_hotkeys(
 		[](void *data, obs_hotkey_id, obs_hotkey_t *hotkey) -> bool {
-			auto *enumData = static_cast<SourceHotkeyEnumData *>(data);
+			auto *enumData = static_cast<EnumData *>(data);
 			if (obs_hotkey_get_registerer_type(hotkey) == OBS_HOTKEY_REGISTERER_SOURCE &&
 			    obs_hotkey_get_registerer(hotkey) == enumData->weak)
 				AddHotkeyComboItem(enumData->combo, hotkey);
@@ -556,30 +145,421 @@ void ActionListWidget::PopulateSourceHotkeyDropdown(const QString &sourceName)
 		},
 		&enumData);
 
-	obs_weak_source_release(weak);
+	obs_weak_source_release(enumData.weak);
 	obs_source_release(source);
 }
 
-QString ActionListWidget::ActionStepToString(const ActionStep &step)
+QPushButton *IconButton(const char *themeID, const char *cls, const QString &tip, QWidget *parent)
 {
-	switch (step.type) {
+	auto *btn = new QPushButton(parent);
+	btn->setFlat(true);
+	StyleIconButton(btn, ButtonSize::Inline, themeID, cls);
+	btn->setToolTip(tip);
+	btn->setAccessibleName(tip);
+	return btn;
+}
+
+} // namespace
+
+// --- ActionStepCard ---
+
+ActionStepCard::ActionStepCard(const ActionStep &step, QWidget *parent) : QFrame(parent), m_step(step)
+{
+	setObjectName("actionCard");
+	setStyleSheet("QFrame#actionCard { background-color: rgba(127, 127, 127, 12%); "
+		      "border: 1px solid rgba(127, 127, 127, 25%); border-radius: 6px; }");
+
+	auto *layout = new QVBoxLayout(this);
+	layout->setContentsMargins(8, 6, 6, 8);
+	layout->setSpacing(6);
+
+	auto *header = new QHBoxLayout();
+	header->setSpacing(6);
+	m_dragHandle = new DragHandle(this);
+	header->addWidget(m_dragHandle);
+	m_numberLabel = new QLabel(this);
+	m_numberLabel->setFixedSize(20, 20);
+	m_numberLabel->setAlignment(Qt::AlignCenter);
+	m_numberLabel->setStyleSheet("background-color: rgba(127, 127, 127, 30%); border-radius: 10px; "
+				     "font-size: 11px; font-weight: bold;");
+	header->addWidget(m_numberLabel);
+
+	auto *title = new QLabel(TypeName(m_step.type), this);
+	title->setStyleSheet("font-weight: bold;");
+	header->addWidget(title, 1);
+
+	auto *removeBtn = IconButton("removeIconSmall", "icon-trash", "Remove Step", this);
+	header->addWidget(removeBtn);
+	layout->addLayout(header);
+
+	m_fieldsRow = new QHBoxLayout();
+	m_fieldsRow->setSpacing(6);
+	layout->addLayout(m_fieldsRow);
+
+	m_warningLabel = new QLabel(this);
+	m_warningLabel->setWordWrap(true);
+	m_warningLabel->setStyleSheet("color: #d9a441;");
+	m_warningLabel->hide();
+	layout->addWidget(m_warningLabel);
+
+	// Dragging the grip is the main way to reorder; the context menu keeps
+	// a keyboard-reachable alternative
+	setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(this, &QWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { ShowMenu(mapToGlobal(pos)); });
+	connect(removeBtn, &QPushButton::clicked, this, [this]() { emit removeRequested(this); });
+
+	BuildFields();
+	UpdateWarning();
+}
+
+QString ActionStepCard::TypeName(ActionType type)
+{
+	switch (type) {
 	case ActionType::SetText:
-		return QString("Set Text: \"%1\"").arg(step.text.left(30));
+		return "Set Text";
 	case ActionType::EnableFilter:
-		return QString("%1 Filter: \"%2\" on \"%3\"")
-			.arg(step.filterEnabled ? "Enable" : "Disable")
-			.arg(step.filterName)
-			.arg(step.filterSourceName);
+		return "Enable/Disable Filter";
 	case ActionType::SwitchScene:
-		return QString("Switch Scene: \"%1\"").arg(step.sceneName);
+		return "Switch Scene";
 	case ActionType::Delay:
-		return QString("Delay: %1 ms").arg(step.delayMs);
+		return "Wait";
 	case ActionType::TriggerGlobalHotkey:
-		return QString("Global Hotkey: \"%1\"").arg(HotkeyDisplayName(step.globalHotkeyName));
+		return "Press OBS Hotkey";
 	case ActionType::TriggerSourceHotkey:
-		return QString("Source Hotkey: \"%1\" on \"%2\"")
-			.arg(HotkeyDisplayName(step.sourceHotkeyName))
-			.arg(step.sourceHotkeySourceName);
+		return "Press Source Hotkey";
 	}
 	return "Unknown";
+}
+
+void ActionStepCard::SetPosition(int index, int count)
+{
+	m_numberLabel->setText(QString::number(index + 1));
+	m_index = index;
+	m_count = count;
+}
+
+void ActionStepCard::ShowMenu(const QPoint &globalPos)
+{
+	QMenu menu(this);
+	menu.addAction("Move Up", this, [this]() { emit moveUpRequested(this); })->setEnabled(m_index > 0);
+	menu.addAction("Move Down", this, [this]() {
+		    emit moveDownRequested(this);
+	    })->setEnabled(m_index < m_count - 1);
+	menu.addSeparator();
+	menu.addAction("Remove Step", this, [this]() { emit removeRequested(this); });
+	menu.exec(globalPos);
+}
+
+QComboBox *ActionStepCard::AddCombo(const QString &accessibleName, int stretch)
+{
+	auto *combo = new QComboBox(this);
+	combo->setAccessibleName(accessibleName);
+	combo->setToolTip(accessibleName);
+	combo->setMinimumWidth(80);
+	m_fieldsRow->addWidget(combo, stretch);
+	return combo;
+}
+
+bool ActionStepCard::SelectOrKeep(QComboBox *combo, const QString &name)
+{
+	if (name.isEmpty())
+		return true;
+	int idx = combo->findText(name);
+	if (idx >= 0) {
+		combo->setCurrentIndex(idx);
+		return true;
+	}
+	combo->addItem(name);
+	combo->setCurrentIndex(combo->count() - 1);
+	return false;
+}
+
+void ActionStepCard::UpdateWarning()
+{
+	if (m_missing.isEmpty()) {
+		m_warningLabel->hide();
+		return;
+	}
+	m_warningLabel->setText(
+		QString::fromUtf8("⚠ Not found in this scene collection: %1").arg(m_missing.join(", ")));
+	m_warningLabel->show();
+}
+
+void ActionStepCard::BuildFields()
+{
+	switch (m_step.type) {
+	case ActionType::SetText:
+		BuildSetText();
+		break;
+	case ActionType::EnableFilter:
+		BuildEnableFilter();
+		break;
+	case ActionType::SwitchScene:
+		BuildSwitchScene();
+		break;
+	case ActionType::Delay:
+		BuildDelay();
+		break;
+	case ActionType::TriggerGlobalHotkey:
+		BuildGlobalHotkey();
+		break;
+	case ActionType::TriggerSourceHotkey:
+		BuildSourceHotkey();
+		break;
+	}
+}
+
+// Each builder fills its fields from the step, then stores the fields back
+// (so a new step saves the values its fields show) and on every change.
+
+void ActionStepCard::BuildSetText()
+{
+	auto *edit = new QLineEdit(m_step.text, this);
+	edit->setPlaceholderText("Text for the timer's source (supports %time%)");
+	edit->setAccessibleName("Text");
+	m_fieldsRow->addWidget(edit, 1);
+	connect(edit, &QLineEdit::textChanged, this, [this](const QString &text) { m_step.text = text; });
+}
+
+void ActionStepCard::BuildEnableFilter()
+{
+	QComboBox *source = AddCombo("Source");
+	QComboBox *filter = AddCombo("Filter");
+	QComboBox *state = AddCombo("Enable or disable", 0);
+	state->addItem("Enable", true);
+	state->addItem("Disable", false);
+
+	PopulateSources(source);
+	if (!SelectOrKeep(source, m_step.filterSourceName))
+		m_missing << QString::fromUtf8("source “%1”").arg(m_step.filterSourceName);
+	PopulateFilters(filter, source->currentText());
+	if (!SelectOrKeep(filter, m_step.filterName) && m_missing.isEmpty())
+		m_missing << QString::fromUtf8("filter “%1”").arg(m_step.filterName);
+	state->setCurrentIndex(m_step.filterEnabled ? 0 : 1);
+
+	auto store = [this, source, filter, state]() {
+		m_step.filterSourceName = source->currentText();
+		m_step.filterName = filter->currentText();
+		m_step.filterEnabled = state->currentData().toBool();
+	};
+	store();
+
+	connect(source, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [filter, source, store](int) {
+		PopulateFilters(filter, source->currentText());
+		store();
+	});
+	connect(filter, QOverload<int>::of(&QComboBox::currentIndexChanged), this, store);
+	connect(state, QOverload<int>::of(&QComboBox::currentIndexChanged), this, store);
+}
+
+void ActionStepCard::BuildSwitchScene()
+{
+	QComboBox *scene = AddCombo("Scene");
+	PopulateScenes(scene);
+	if (!SelectOrKeep(scene, m_step.sceneName))
+		m_missing << QString::fromUtf8("scene “%1”").arg(m_step.sceneName);
+
+	auto store = [this, scene]() {
+		m_step.sceneName = scene->currentText();
+	};
+	store();
+	connect(scene, QOverload<int>::of(&QComboBox::currentIndexChanged), this, store);
+}
+
+void ActionStepCard::BuildDelay()
+{
+	auto *spin = new QDoubleSpinBox(this);
+	spin->setRange(0.1, 300.0);
+	spin->setDecimals(1);
+	spin->setSingleStep(0.5);
+	spin->setSuffix(" seconds");
+	spin->setAccessibleName("Wait time");
+	spin->setValue(m_step.delayMs / 1000.0);
+	m_fieldsRow->addWidget(spin);
+	m_fieldsRow->addStretch();
+
+	auto store = [this, spin]() {
+		m_step.delayMs = static_cast<int>(spin->value() * 1000.0 + 0.5);
+	};
+	store();
+	connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, store);
+}
+
+void ActionStepCard::BuildGlobalHotkey()
+{
+	QComboBox *hotkey = AddCombo("Hotkey");
+	hotkey->setEditable(true);
+	PopulateGlobalHotkeys(hotkey);
+	if (!m_step.globalHotkeyName.isEmpty() && !SetHotkeyComboValue(hotkey, m_step.globalHotkeyName))
+		m_missing << QString::fromUtf8("hotkey “%1”").arg(m_step.globalHotkeyName);
+
+	auto store = [this, hotkey]() {
+		m_step.globalHotkeyName = HotkeyComboValue(hotkey);
+	};
+	store();
+	connect(hotkey, &QComboBox::currentTextChanged, this, store);
+}
+
+void ActionStepCard::BuildSourceHotkey()
+{
+	QComboBox *source = AddCombo("Source");
+	QComboBox *hotkey = AddCombo("Hotkey");
+	hotkey->setEditable(true);
+
+	PopulateSources(source);
+	if (!SelectOrKeep(source, m_step.sourceHotkeySourceName))
+		m_missing << QString::fromUtf8("source “%1”").arg(m_step.sourceHotkeySourceName);
+	PopulateSourceHotkeys(hotkey, source->currentText());
+	if (!m_step.sourceHotkeyName.isEmpty() && !SetHotkeyComboValue(hotkey, m_step.sourceHotkeyName) &&
+	    m_missing.isEmpty())
+		m_missing << QString::fromUtf8("hotkey “%1”").arg(m_step.sourceHotkeyName);
+
+	auto store = [this, source, hotkey]() {
+		m_step.sourceHotkeySourceName = source->currentText();
+		m_step.sourceHotkeyName = HotkeyComboValue(hotkey);
+	};
+	store();
+
+	connect(source, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [hotkey, source, store](int) {
+		PopulateSourceHotkeys(hotkey, source->currentText());
+		store();
+	});
+	connect(hotkey, &QComboBox::currentTextChanged, this, store);
+}
+
+// --- ActionListWidget ---
+
+ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
+{
+	auto *mainLayout = new QVBoxLayout(this);
+	mainLayout->setContentsMargins(0, 0, 0, 0);
+	mainLayout->setSpacing(8);
+
+	m_scroll = new QScrollArea(this);
+	m_scroll->setWidgetResizable(true);
+	m_scroll->setFrameShape(QFrame::NoFrame);
+	m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	m_scroll->viewport()->setAutoFillBackground(false);
+
+	auto *content = new QWidget(m_scroll);
+	content->setAutoFillBackground(false);
+	m_cardsLayout = new QVBoxLayout(content);
+	m_cardsLayout->setContentsMargins(0, 0, 4, 0);
+	m_cardsLayout->setSpacing(6);
+
+	m_emptyLabel = new QLabel("No steps yet. Add one to switch scenes, toggle filters, set text or press "
+				  "hotkeys when the timer ends.",
+				  content);
+	m_emptyLabel->setWordWrap(true);
+	m_emptyLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
+	m_cardsLayout->addWidget(m_emptyLabel);
+	m_cardsLayout->addStretch();
+
+	m_scroll->setWidget(content);
+
+	m_reorder = new DragReorderController(
+		m_scroll,
+		[this]() {
+			QList<QWidget *> items;
+			for (auto *card : m_cards)
+				items.append(card);
+			return items;
+		},
+		[this](int from, int to) {
+			m_cards.move(from, to);
+			Relayout();
+		},
+		[this]() { emit stepsChanged(); }, this);
+	mainLayout->addWidget(m_scroll, 1);
+
+	m_addBtn = new QPushButton("Add Step", this);
+	m_addBtn->setAutoDefault(false);
+	auto *addMenu = new QMenu(m_addBtn);
+	auto addSection = [this, addMenu](const QString &title, std::initializer_list<ActionType> types) {
+		addMenu->addSection(title);
+		for (ActionType type : types) {
+			addMenu->addAction(ActionStepCard::TypeName(type), this, [this, type]() {
+				ActionStep step;
+				step.type = type;
+				AddCard(step);
+				emit stepsChanged();
+
+				// Bring the new card into view once the layout has
+				// placed it
+				ActionStepCard *card = m_cards.last();
+				QTimer::singleShot(0, this, [this, card]() { m_scroll->ensureWidgetVisible(card); });
+			});
+		}
+	};
+	addSection("Scenes and sources", {ActionType::SwitchScene, ActionType::EnableFilter, ActionType::SetText});
+	addSection("Hotkeys", {ActionType::TriggerGlobalHotkey, ActionType::TriggerSourceHotkey});
+	addSection("Timing", {ActionType::Delay});
+	m_addBtn->setMenu(addMenu);
+
+	auto *buttonRow = new QHBoxLayout();
+	buttonRow->addWidget(m_addBtn);
+	buttonRow->addStretch();
+	mainLayout->addLayout(buttonRow);
+}
+
+void ActionListWidget::setActions(const QList<ActionStep> &actions)
+{
+	qDeleteAll(m_cards);
+	m_cards.clear();
+	for (const auto &step : actions)
+		AddCard(step);
+	Relayout();
+}
+
+QList<ActionStep> ActionListWidget::actions() const
+{
+	QList<ActionStep> steps;
+	for (const auto *card : m_cards)
+		steps.append(card->step());
+	return steps;
+}
+
+void ActionListWidget::AddCard(const ActionStep &step)
+{
+	auto *card = new ActionStepCard(step, this);
+	connect(card, &ActionStepCard::moveUpRequested, this, [this](ActionStepCard *c) { MoveCard(c, -1); });
+	connect(card, &ActionStepCard::moveDownRequested, this, [this](ActionStepCard *c) { MoveCard(c, 1); });
+	connect(card, &ActionStepCard::removeRequested, this, &ActionListWidget::RemoveCard);
+	m_reorder->Attach(card->dragHandle(), card);
+	m_cards.append(card);
+	Relayout();
+}
+
+void ActionListWidget::MoveCard(ActionStepCard *card, int delta)
+{
+	const int from = m_cards.indexOf(card);
+	const int to = from + delta;
+	if (from < 0 || to < 0 || to >= m_cards.size())
+		return;
+	m_cards.move(from, to);
+	Relayout();
+	emit stepsChanged();
+}
+
+void ActionListWidget::RemoveCard(ActionStepCard *card)
+{
+	if (!m_cards.removeOne(card))
+		return;
+	card->deleteLater();
+	Relayout();
+	emit stepsChanged();
+}
+
+void ActionListWidget::Relayout()
+{
+	for (auto *card : m_cards)
+		m_cardsLayout->removeWidget(card);
+
+	// Cards go after the empty-state label and before the stretch
+	for (int i = 0; i < m_cards.size(); i++) {
+		m_cardsLayout->insertWidget(i + 1, m_cards[i]);
+		m_cards[i]->SetPosition(i, m_cards.size());
+	}
+	m_emptyLabel->setVisible(m_cards.isEmpty());
 }

@@ -39,6 +39,9 @@ struct DurationValue {
 };
 
 struct DisplayFormat {
+	// Auto shows days and hours only while they're non-zero (minutes and
+	// seconds always); the show* flags below are used when it's off.
+	bool autoUnits = false;
 	bool showDays = false;
 	bool showHours = true;
 	bool showMinutes = true;
@@ -95,6 +98,10 @@ struct TimerData {
 	// Display
 	DisplayFormat display;
 	QString selectedTextSource;
+
+	// Text written to the source once the timer finishes, in place of the
+	// final time; empty keeps the time showing
+	QString finishedText;
 
 	// Stream behavior
 	bool startOnStreamStart = false;

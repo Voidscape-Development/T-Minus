@@ -26,9 +26,32 @@ DurationValue MsToDuration(long long ms)
 	return d;
 }
 
-static QString BuildTimeString(const DisplayFormat &fmt, long long timeMs)
+static QString BuildTimeString(const DisplayFormat &format, long long timeMs)
 {
 	DurationValue d = MsToDuration(timeMs);
+
+	DisplayFormat fmt = format;
+	if (fmt.autoUnits) {
+		fmt.showDays = d.days > 0;
+		fmt.showHours = d.days > 0 || d.hours > 0;
+		fmt.showMinutes = true;
+		fmt.showSeconds = true;
+	}
+
+	// Fold hidden leading units into the next unit down so no time is
+	// lost: 1:05:00 shown as MM:SS reads 65:00, not 05:00.
+	if (!fmt.showDays) {
+		d.hours += d.days * 24;
+		d.days = 0;
+	}
+	if (!fmt.showHours) {
+		d.minutes += d.hours * 60;
+		d.hours = 0;
+	}
+	if (!fmt.showMinutes) {
+		d.seconds += d.minutes * 60;
+		d.minutes = 0;
+	}
 
 	QString result;
 	bool isFirst = true;

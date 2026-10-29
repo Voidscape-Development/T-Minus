@@ -1,4 +1,6 @@
 #include "tminus-dock.hpp"
+#include "drag-reorder.hpp"
+#include "button-style.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../plugin-support.h"
 
@@ -8,6 +10,7 @@
 #include <util/platform.h>
 
 #include <QHBoxLayout>
+#include <QMenu>
 #include <QWidget>
 
 TMinusDock::TMinusDock(QWidget *parent) : OBSDock(parent)
@@ -33,6 +36,12 @@ void TMinusDock::SetupUI()
 	mainLayout->setContentsMargins(0, 0, 0, 0);
 	mainLayout->setSpacing(0);
 
+	m_stack = new QStackedWidget(this);
+	mainLayout->addWidget(m_stack, 1);
+
+	m_emptyState = CreateEmptyState();
+	m_stack->addWidget(m_emptyState);
+
 	// Scrollable timer list. No frame and no background fill so the dock
 	// takes on the active OBS theme's window background, like native docks.
 	m_scrollArea = new QScrollArea(this);
@@ -49,67 +58,178 @@ void TMinusDock::SetupUI()
 	m_timerListLayout->addStretch();
 
 	m_scrollArea->setWidget(scrollContent);
-	mainLayout->addWidget(m_scrollArea, 1);
+	m_stack->addWidget(m_scrollArea);
+
+	// Timers are reordered by dragging their grip; the order is saved once
+	// the drag ends
+	m_reorder = new DragReorderController(
+		m_scrollArea,
+		[this]() {
+			QList<QWidget *> items;
+			for (auto *timer : m_timers)
+				items.append(timer);
+			return items;
+		},
+		[this](int from, int to) {
+			m_timers.move(from, to);
+			RelayoutTimers();
+		},
+		[this]() {
+			RefreshListState();
+			SaveSettings();
+		},
+		this);
 
 	// Bottom toolbar, mirroring the native OBS dock toolbars (Sources,
 	// Scenes, Audio Mixer). The theme's "icon-*" class rules render these
 	// as flat themed icon buttons; themeID covers legacy themes.
 	auto *toolbar = new QHBoxLayout();
-	toolbar->setContentsMargins(4, 2, 4, 2);
-	toolbar->setSpacing(2);
+	toolbar->setContentsMargins(4, 4, 4, 4);
+	toolbar->setSpacing(4);
 
-	m_addBtn = new QPushButton(this);
-	m_addBtn->setFixedSize(24, 24);
-	m_addBtn->setFlat(true);
-	m_addBtn->setProperty("themeID", "addIconSmall");
-	m_addBtn->setProperty("class", "icon-plus");
-	m_addBtn->setToolTip("Add Timer");
+	auto toolbarButton = [this](const char *themeID, const char *cls, const QString &tip) {
+		auto *btn = new QPushButton(this);
+		btn->setFlat(true);
+		btn->setToolTip(tip);
+		btn->setAccessibleName(tip);
+		StyleIconButton(btn, ButtonSize::Toolbar, themeID, cls);
+		return btn;
+	};
+
+	m_addBtn = toolbarButton("addIconSmall", "icon-plus", "Add Timer");
 	toolbar->addWidget(m_addBtn);
 
 	toolbar->addStretch();
 
-	m_startAllBtn = new QPushButton(this);
-	m_startAllBtn->setFixedSize(24, 24);
-	m_startAllBtn->setFlat(true);
-	m_startAllBtn->setProperty("themeID", "playIcon");
-	m_startAllBtn->setProperty("class", "icon-media-play");
-	m_startAllBtn->setToolTip("Start All Timers");
+	m_runningLabel = new QLabel(this);
+	m_runningLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
+	toolbar->addWidget(m_runningLabel);
+	toolbar->addSpacing(4);
+
+	m_startAllBtn = toolbarButton("playIcon", "icon-media-play", "Start All Timers");
 	toolbar->addWidget(m_startAllBtn);
 
-	m_stopAllBtn = new QPushButton(this);
-	m_stopAllBtn->setFixedSize(24, 24);
-	m_stopAllBtn->setFlat(true);
-	m_stopAllBtn->setProperty("themeID", "stopIcon");
-	m_stopAllBtn->setProperty("class", "icon-media-stop");
-	m_stopAllBtn->setToolTip("Stop All Timers");
-	toolbar->addWidget(m_stopAllBtn);
+	m_pauseAllBtn = toolbarButton("pauseIcon", "icon-media-pause", "Pause All Timers");
+	toolbar->addWidget(m_pauseAllBtn);
+
+	// A plain button like its neighbours (a QToolButton gets different
+	// theme padding and sizing), with a drawn icon since themes have none
+	m_compactBtn = toolbarButton(nullptr, nullptr, "Compact View");
+	m_compactBtn->setCheckable(true);
+	m_compactBtn->setIcon(ListIcon(palette().color(QPalette::ButtonText)));
+	toolbar->addWidget(m_compactBtn);
 
 	mainLayout->addLayout(toolbar);
 
 	// Connections
-	connect(m_addBtn, &QPushButton::clicked, this, [this]() { AddTimer(); });
+	connect(m_addBtn, &QPushButton::clicked, this, &TMinusDock::ShowAddMenu);
 	connect(m_startAllBtn, &QPushButton::clicked, this, &TMinusDock::StartAllTimers);
-	connect(m_stopAllBtn, &QPushButton::clicked, this, &TMinusDock::StopAllTimers);
+	connect(m_pauseAllBtn, &QPushButton::clicked, this, &TMinusDock::PauseAllTimers);
+	connect(m_compactBtn, &QPushButton::toggled, this, [this](bool checked) {
+		SetCompact(checked);
+		SaveSettings();
+	});
+
+	RefreshListState();
 }
 
-void TMinusDock::AddTimer(obs_data_t *savedData)
+QWidget *TMinusDock::CreateEmptyState()
+{
+	auto *page = new QWidget(this);
+	auto *layout = new QVBoxLayout(page);
+	layout->setContentsMargins(12, 24, 12, 12);
+	layout->setSpacing(8);
+
+	m_emptyTitle = new QLabel(page);
+	m_emptyTitle->setWordWrap(true);
+	m_emptyTitle->setStyleSheet("font-weight: bold;");
+	layout->addWidget(m_emptyTitle);
+
+	auto *body = new QLabel("Timers belong to the current scene collection. Pick a type to create one; "
+				"you can name it and link a text source next.",
+				page);
+	body->setWordWrap(true);
+	body->setStyleSheet("color: rgba(127, 127, 127, 100%);");
+	layout->addWidget(body);
+	layout->addSpacing(4);
+
+	auto addTile = [this, page, layout](TimerType type, const QString &title, const QString &desc) {
+		auto *tile = new QPushButton(QString("%1\n%2").arg(title, desc), page);
+		tile->setStyleSheet("text-align: left; padding: 8px 10px;");
+		tile->setMinimumHeight(52);
+		tile->setAccessibleName(title);
+		connect(tile, &QPushButton::clicked, this, [this, type]() { AddTimerOfType(type); });
+		layout->addWidget(tile);
+	};
+	addTile(TimerType::Countdown, "Countdown", "Counts down a fixed length. Starting soon, BRB.");
+	addTile(TimerType::Stopwatch, "Stopwatch", "Counts up from zero. Stream uptime, segments.");
+	addTile(TimerType::TimeUntil, "Time Until", "Counts to a date and time. Event starts.");
+
+	layout->addStretch();
+	return page;
+}
+
+void TMinusDock::ShowAddMenu()
+{
+	QMenu menu(this);
+	menu.addAction("Countdown", this, [this]() { AddTimerOfType(TimerType::Countdown); });
+	menu.addAction("Stopwatch", this, [this]() { AddTimerOfType(TimerType::Stopwatch); });
+	menu.addAction("Time Until", this, [this]() { AddTimerOfType(TimerType::TimeUntil); });
+
+	// The toolbar sits at the bottom of the dock, so open upwards
+	const QPoint pos = m_addBtn->mapToGlobal(QPoint(0, 0)) - QPoint(0, menu.sizeHint().height());
+	menu.exec(pos);
+}
+
+TimerWidget *TMinusDock::AddTimer(obs_data_t *savedData, int index)
 {
 	auto *timer = new TimerWidget(this, savedData);
+	timer->SetCompact(m_compact);
+	for (DragHandle *handle : timer->dragHandles())
+		m_reorder->Attach(handle, timer);
 
 	connect(timer, &TimerWidget::removeRequested, this, &TMinusDock::RemoveTimer);
+	connect(timer, &TimerWidget::duplicateRequested, this, &TMinusDock::DuplicateTimer);
 	connect(timer, &TimerWidget::moveRequested, this, &TMinusDock::MoveTimer);
 	connect(timer, &TimerWidget::settingsChanged, this, [this]() { SaveSettings(); });
+	connect(timer, &TimerWidget::stateChanged, this, &TMinusDock::UpdateRunningCount);
 
-	// Insert before the stretch
-	int insertIdx = m_timerListLayout->count() - 1;
-	if (insertIdx < 0)
-		insertIdx = 0;
-	m_timerListLayout->insertWidget(insertIdx, timer);
-	m_timers.append(timer);
+	if (index < 0 || index > m_timers.size())
+		index = m_timers.size();
+
+	// The list layout holds the timers in order followed by a stretch
+	m_timerListLayout->insertWidget(index, timer);
+	m_timers.insert(index, timer);
 
 	obs_log(LOG_INFO, "Timer added: %s", timer->timerId().toUtf8().constData());
 
+	RefreshListState();
 	SaveSettings();
+	return timer;
+}
+
+void TMinusDock::AddTimerOfType(TimerType type)
+{
+	TimerWidget *timer = AddTimer();
+	timer->InitAsType(type);
+	SaveSettings();
+
+	m_scrollArea->ensureWidgetVisible(timer);
+	timer->OpenSettings();
+}
+
+void TMinusDock::DuplicateTimer(const QString &id)
+{
+	for (int i = 0; i < m_timers.size(); i++) {
+		if (m_timers[i]->timerId() != id)
+			continue;
+
+		obs_data_t *copy = obs_data_create();
+		m_timers[i]->SaveDuplicateData(copy);
+		AddTimer(copy, i + 1);
+		obs_data_release(copy);
+		return;
+	}
 }
 
 void TMinusDock::RemoveTimer(const QString &id)
@@ -120,6 +240,7 @@ void TMinusDock::RemoveTimer(const QString &id)
 			m_timerListLayout->removeWidget(timer);
 			timer->deleteLater();
 			obs_log(LOG_INFO, "Timer removed: %s", id.toUtf8().constData());
+			RefreshListState();
 			SaveSettings();
 			return;
 		}
@@ -137,17 +258,59 @@ void TMinusDock::MoveTimer(Direction dir, const QString &id)
 			return;
 
 		m_timers.swapItemsAt(i, newIdx);
-
-		// Rebuild layout order
-		for (int j = 0; j < m_timers.size(); j++) {
-			m_timerListLayout->removeWidget(m_timers[j]);
-		}
-		for (int j = 0; j < m_timers.size(); j++) {
-			m_timerListLayout->insertWidget(j, m_timers[j]);
-		}
-
+		RelayoutTimers();
+		RefreshListState();
 		SaveSettings();
 		return;
+	}
+}
+
+void TMinusDock::RelayoutTimers()
+{
+	for (auto *timer : m_timers)
+		m_timerListLayout->removeWidget(timer);
+	for (int i = 0; i < m_timers.size(); i++)
+		m_timerListLayout->insertWidget(i, m_timers[i]);
+}
+
+void TMinusDock::RefreshListState()
+{
+	for (int i = 0; i < m_timers.size(); i++)
+		m_timers[i]->SetMoveEnabled(i > 0, i < m_timers.size() - 1);
+
+	QString collection = m_currentCollection;
+	if (collection.isEmpty() || collection == QStringLiteral("__default__"))
+		m_emptyTitle->setText("No timers in this scene collection yet");
+	else
+		m_emptyTitle->setText(QString::fromUtf8("No timers in “%1” yet").arg(collection));
+
+	m_stack->setCurrentWidget(m_timers.isEmpty() ? m_emptyState : static_cast<QWidget *>(m_scrollArea));
+	m_startAllBtn->setEnabled(!m_timers.isEmpty());
+	m_pauseAllBtn->setEnabled(!m_timers.isEmpty());
+
+	UpdateRunningCount();
+}
+
+void TMinusDock::UpdateRunningCount()
+{
+	int running = 0;
+	for (auto *timer : m_timers) {
+		if (timer->state() == TimerState::Running)
+			running++;
+	}
+	m_runningLabel->setText(running > 0 ? QString("%1 running").arg(running) : QString());
+}
+
+void TMinusDock::SetCompact(bool compact)
+{
+	m_compact = compact;
+	for (auto *timer : m_timers)
+		timer->SetCompact(compact);
+	m_timerListLayout->setSpacing(compact ? 2 : 4);
+
+	if (m_compactBtn->isChecked() != compact) {
+		QSignalBlocker blocker(m_compactBtn);
+		m_compactBtn->setChecked(compact);
 	}
 }
 
@@ -158,7 +321,7 @@ void TMinusDock::StartAllTimers()
 	}
 }
 
-void TMinusDock::StopAllTimers()
+void TMinusDock::PauseAllTimers()
 {
 	for (auto *timer : m_timers) {
 		timer->PauseTimer();
@@ -206,7 +369,9 @@ void TMinusDock::WriteConfigRoot(obs_data_t *root) const
 
 void TMinusDock::SaveSettings()
 {
-	if (m_loading)
+	// Before the first load the timer list is empty; saving it would wipe
+	// the stored timers for this collection.
+	if (m_loading || !m_finishedLoading)
 		return;
 
 	if (m_currentCollection.isEmpty())
@@ -242,9 +407,11 @@ void TMinusDock::SaveSettings()
 	// Legacy single-collection format; drop once migrated
 	obs_data_erase(root, "timers");
 
+	obs_data_set_bool(root, "compactView", m_compact);
+
 	// Global hotkeys apply across collections
 	SaveHotkey(root, m_startAllHotkeyId, "TMinus_StartAll");
-	SaveHotkey(root, m_stopAllHotkeyId, "TMinus_StopAll");
+	SaveHotkey(root, m_pauseAllHotkeyId, "TMinus_StopAll");
 
 	WriteConfigRoot(root);
 	obs_data_release(root);
@@ -297,6 +464,8 @@ void TMinusDock::LoadSavedSettings()
 
 	obs_data_t *section = nullptr;
 	if (root) {
+		SetCompact(obs_data_get_bool(root, "compactView"));
+
 		obs_data_t *collections = obs_data_get_obj(root, "collections");
 		if (collections) {
 			section = obs_data_get_obj(collections, m_currentCollection.toUtf8().constData());
@@ -320,6 +489,7 @@ void TMinusDock::LoadSavedSettings()
 	obs_data_release(root);
 
 	m_loading = false;
+	RefreshListState();
 }
 
 void TMinusDock::ClearTimers()
@@ -343,6 +513,7 @@ void TMinusDock::ClearTimers()
 		timer->deleteLater();
 	}
 	m_timers.clear();
+	RefreshListState();
 }
 
 void TMinusDock::ReloadForCurrentCollection()
@@ -368,6 +539,7 @@ void TMinusDock::ReloadForCurrentCollection()
 	}
 
 	m_loading = false;
+	RefreshListState();
 }
 
 void TMinusDock::HandleCollectionRenamed()
@@ -392,6 +564,7 @@ void TMinusDock::HandleCollectionRenamed()
 	}
 
 	SaveSettings();
+	RefreshListState();
 }
 
 void TMinusDock::PruneDeletedCollections()
@@ -454,17 +627,19 @@ void TMinusDock::RegisterGlobalHotkeys(obs_data_t *savedData)
 		m_startAllHotkeyId, "TMinus_StartAll", "T-Minus: Start All Timers", this,
 		[this]() { StartAllTimers(); }, "Start All Timers", savedData);
 
+	// Registered under its original "StopAll" name so existing key
+	// bindings keep working; it has always paused rather than stopped.
 	LoadHotkey(
-		m_stopAllHotkeyId, "TMinus_StopAll", "T-Minus: Stop All Timers", this, [this]() { StopAllTimers(); },
-		"Stop All Timers", savedData);
+		m_pauseAllHotkeyId, "TMinus_StopAll", "T-Minus: Pause All Timers", this, [this]() { PauseAllTimers(); },
+		"Pause All Timers", savedData);
 }
 
 void TMinusDock::UnregisterGlobalHotkeys()
 {
 	CleanupHotkey(m_startAllHotkeyId);
 	m_startAllHotkeyId = -1;
-	CleanupHotkey(m_stopAllHotkeyId);
-	m_stopAllHotkeyId = -1;
+	CleanupHotkey(m_pauseAllHotkeyId);
+	m_pauseAllHotkeyId = -1;
 }
 
 void TMinusDock::OBSFrontendEventHandler(enum obs_frontend_event event, void *data)

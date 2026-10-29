@@ -15,21 +15,36 @@ TimerEngine::~TimerEngine()
 
 void TimerEngine::configure(TimerType type, const DurationValue &countdown, const QDateTime &target)
 {
-	m_type = type;
-	m_targetDateTime = target;
+	m_configType = type;
+	m_configInitialMs = type == TimerType::Countdown ? DurationToMs(countdown) : 0;
+	m_configTarget = target;
+
+	// Editing a running or paused timer must not throw away its progress
+	if (m_state == TimerState::Stopped || m_state == TimerState::Finished) {
+		applyConfig();
+		resetTime();
+	}
+}
+
+void TimerEngine::applyConfig()
+{
+	m_type = m_configType;
+	m_initialMs = m_configInitialMs;
+	m_targetDateTime = m_configTarget;
+}
+
+void TimerEngine::resetTime()
+{
 	m_lastDisplayedSeconds = -1;
 
-	switch (type) {
+	switch (m_type) {
 	case TimerType::Countdown:
-		m_initialMs = DurationToMs(countdown);
 		m_timeMs = m_initialMs;
 		break;
 	case TimerType::Stopwatch:
-		m_initialMs = 0;
 		m_timeMs = 0;
 		break;
 	case TimerType::TimeUntil:
-		m_initialMs = 0;
 		m_timeMs = QDateTime::currentDateTime().msecsTo(m_targetDateTime);
 		if (m_timeMs < 0)
 			m_timeMs = 0;
@@ -42,8 +57,15 @@ void TimerEngine::start()
 	if (m_state == TimerState::Running)
 		return;
 
+	// Starting a finished timer begins a fresh run; resuming from zero
+	// would finish again on the first tick and re-fire the end actions.
+	if (m_state == TimerState::Finished) {
+		applyConfig();
+		resetTime();
+	}
+
 	m_lastDisplayedSeconds = -1;
-	m_wallClockStart = QDateTime::currentDateTime();
+	m_elapsed.start();
 	m_msAtStart = m_timeMs;
 	m_tickTimer->start(TIMER_TICK_INTERVAL);
 	setState(TimerState::Running);
@@ -61,21 +83,8 @@ void TimerEngine::pause()
 void TimerEngine::restart()
 {
 	m_tickTimer->stop();
-
-	switch (m_type) {
-	case TimerType::Countdown:
-		m_timeMs = m_initialMs;
-		break;
-	case TimerType::Stopwatch:
-		m_timeMs = 0;
-		break;
-	case TimerType::TimeUntil:
-		m_timeMs = QDateTime::currentDateTime().msecsTo(m_targetDateTime);
-		if (m_timeMs < 0)
-			m_timeMs = 0;
-		break;
-	}
-
+	applyConfig();
+	resetTime();
 	setState(TimerState::Stopped);
 	emit tick(m_timeMs);
 }
@@ -88,27 +97,28 @@ void TimerEngine::stop()
 
 void TimerEngine::addTime(int deltaMs)
 {
-	m_timeMs += deltaMs;
-	if (m_timeMs < 0)
-		m_timeMs = 0;
-
-	if (m_state == TimerState::Running) {
-		m_wallClockStart = QDateTime::currentDateTime();
-		m_msAtStart = m_timeMs;
+	if (m_type == TimerType::TimeUntil) {
+		// Time-until is recomputed from the target on every tick, so
+		// adjusting it means moving the target of the current run.
+		m_targetDateTime = m_targetDateTime.addMSecs(deltaMs);
+		setTimeMs(QDateTime::currentDateTime().msecsTo(m_targetDateTime));
+		return;
 	}
 
-	m_lastDisplayedSeconds = m_timeMs / 1000;
-	emit tick(m_timeMs);
+	setTimeMs(m_timeMs + deltaMs);
 }
 
 void TimerEngine::setTimeMs(long long ms)
 {
+	if (m_type == TimerType::TimeUntil)
+		m_targetDateTime = QDateTime::currentDateTime().addMSecs(ms);
+
 	m_timeMs = ms;
 	if (m_timeMs < 0)
 		m_timeMs = 0;
 
 	if (m_state == TimerState::Running) {
-		m_wallClockStart = QDateTime::currentDateTime();
+		m_elapsed.start();
 		m_msAtStart = m_timeMs;
 	}
 
@@ -124,37 +134,35 @@ void TimerEngine::setState(TimerState s)
 	emit stateChanged(m_state);
 }
 
+void TimerEngine::finish()
+{
+	m_timeMs = 0;
+	m_tickTimer->stop();
+	m_lastDisplayedSeconds = 0;
+	emit tick(m_timeMs);
+	setState(TimerState::Finished);
+	emit finished();
+}
+
 void TimerEngine::onTick()
 {
-	long long elapsed = m_wallClockStart.msecsTo(QDateTime::currentDateTime());
-
 	switch (m_type) {
 	case TimerType::Countdown:
-		m_timeMs = m_msAtStart - elapsed;
+		m_timeMs = m_msAtStart - m_elapsed.elapsed();
 		if (m_timeMs <= 0) {
-			m_timeMs = 0;
-			m_tickTimer->stop();
-			m_lastDisplayedSeconds = 0;
-			emit tick(m_timeMs);
-			setState(TimerState::Finished);
-			emit finished();
+			finish();
 			return;
 		}
 		break;
 
 	case TimerType::Stopwatch:
-		m_timeMs = m_msAtStart + elapsed;
+		m_timeMs = m_msAtStart + m_elapsed.elapsed();
 		break;
 
 	case TimerType::TimeUntil:
 		m_timeMs = QDateTime::currentDateTime().msecsTo(m_targetDateTime);
 		if (m_timeMs <= 0) {
-			m_timeMs = 0;
-			m_tickTimer->stop();
-			m_lastDisplayedSeconds = 0;
-			emit tick(m_timeMs);
-			setState(TimerState::Finished);
-			emit finished();
+			finish();
 			return;
 		}
 		break;

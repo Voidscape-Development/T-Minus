@@ -16,11 +16,12 @@ ActionExecutor::~ActionExecutor()
 	cancel();
 }
 
-void ActionExecutor::execute(const QList<ActionStep> &actions, const QString &textSourceName)
+void ActionExecutor::execute(const QList<ActionStep> &actions, const QString &textSourceName, const QString &timeText)
 {
 	cancel();
 	m_actions = actions;
 	m_textSourceName = textSourceName;
+	m_timeText = timeText;
 	m_currentStep = 0;
 
 	if (m_actions.isEmpty()) {
@@ -90,8 +91,11 @@ void ActionExecutor::executeSetText(const ActionStep &step)
 	if (!source)
 		return;
 
+	QString text = step.text;
+	text.replace("%time%", m_timeText);
+
 	obs_data_t *settings = obs_source_get_settings(source);
-	obs_data_set_string(settings, "text", step.text.toUtf8().constData());
+	obs_data_set_string(settings, "text", text.toUtf8().constData());
 	obs_source_update(source, settings);
 	obs_data_release(settings);
 	obs_source_release(source);

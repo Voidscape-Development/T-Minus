@@ -1,17 +1,67 @@
 #pragma once
 
 #include <QWidget>
-#include <QListWidget>
-#include <QPushButton>
 #include <QComboBox>
-#include <QLineEdit>
-#include <QSpinBox>
-#include <QCheckBox>
-#include <QStackedWidget>
+#include <QDoubleSpinBox>
+#include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QList>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QVBoxLayout>
 
 #include "../core/timer-data.hpp"
+
+class DragHandle;
+class DragReorderController;
+
+// One end-action step, edited in place. The card owns a copy of the step
+// and writes every field change straight into it.
+class ActionStepCard : public QFrame {
+	Q_OBJECT
+
+public:
+	explicit ActionStepCard(const ActionStep &step, QWidget *parent = nullptr);
+
+	const ActionStep &step() const { return m_step; }
+	DragHandle *dragHandle() const { return m_dragHandle; }
+	void SetPosition(int index, int count);
+
+	static QString TypeName(ActionType type);
+
+signals:
+	void moveUpRequested(ActionStepCard *card);
+	void moveDownRequested(ActionStepCard *card);
+	void removeRequested(ActionStepCard *card);
+
+private:
+	void BuildFields();
+	void BuildSetText();
+	void BuildEnableFilter();
+	void BuildSwitchScene();
+	void BuildDelay();
+	void BuildGlobalHotkey();
+	void BuildSourceHotkey();
+
+	// Selects name in combo. Returns false when the name had to be added
+	// because it isn't available right now (e.g. a deleted scene).
+	bool SelectOrKeep(QComboBox *combo, const QString &name);
+	void UpdateWarning();
+	QComboBox *AddCombo(const QString &accessibleName, int stretch = 1);
+
+	void ShowMenu(const QPoint &globalPos);
+
+	ActionStep m_step;
+	DragHandle *m_dragHandle;
+	QLabel *m_numberLabel;
+	int m_index = 0;
+	int m_count = 0;
+	QHBoxLayout *m_fieldsRow;
+	QLabel *m_warningLabel;
+	QStringList m_missing;
+};
 
 class ActionListWidget : public QWidget {
 	Q_OBJECT
@@ -22,61 +72,20 @@ public:
 	void setActions(const QList<ActionStep> &actions);
 	QList<ActionStep> actions() const;
 
-private slots:
-	void OnAddAction();
-	void OnRemoveAction();
-	void OnMoveUp();
-	void OnMoveDown();
-	void OnSelectionChanged();
-	void OnTypeChanged(int index);
-	void OnEditFieldChanged();
+signals:
+	// Emitted when steps are added, removed or reordered
+	void stepsChanged();
 
 private:
-	void SetupUI();
-	void SetupEditForms();
-	void UpdateListDisplay();
-	void LoadStepIntoEditor(int index);
-	void SaveEditorIntoStep(int index);
-	void PopulateSourceDropdowns();
-	void PopulateFilterDropdown(const QString &sourceName);
-	void PopulateSceneDropdown();
-	void PopulateGlobalHotkeyDropdown();
-	void PopulateSourceHotkeyDropdown(const QString &sourceName);
+	void AddCard(const ActionStep &step);
+	void MoveCard(ActionStepCard *card, int delta);
+	void RemoveCard(ActionStepCard *card);
+	void Relayout();
 
-	static QString ActionStepToString(const ActionStep &step);
-
-	QList<ActionStep> m_actions;
-
-	QListWidget *m_listWidget;
+	QScrollArea *m_scroll;
+	QVBoxLayout *m_cardsLayout;
+	QLabel *m_emptyLabel;
 	QPushButton *m_addBtn;
-	QPushButton *m_removeBtn;
-	QPushButton *m_moveUpBtn;
-	QPushButton *m_moveDownBtn;
-
-	// Editor
-	QComboBox *m_typeCombo;
-	QStackedWidget *m_editStack;
-
-	// SetText page
-	QLineEdit *m_setTextEdit;
-
-	// EnableFilter page
-	QComboBox *m_filterSourceCombo;
-	QComboBox *m_filterNameCombo;
-	QCheckBox *m_filterEnabledCheck;
-
-	// SwitchScene page
-	QComboBox *m_sceneCombo;
-
-	// Delay page
-	QSpinBox *m_delaySpin;
-
-	// TriggerGlobalHotkey page
-	QComboBox *m_globalHotkeyCombo;
-
-	// TriggerSourceHotkey page
-	QComboBox *m_sourceHotkeySourceCombo;
-	QComboBox *m_sourceHotkeyNameCombo;
-
-	bool m_updatingEditor = false;
+	QList<ActionStepCard *> m_cards;
+	DragReorderController *m_reorder;
 };
