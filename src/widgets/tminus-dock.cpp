@@ -1,4 +1,5 @@
 #include "tminus-dock.hpp"
+#include "drag-reorder.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../plugin-support.h"
 
@@ -57,6 +58,26 @@ void TMinusDock::SetupUI()
 
 	m_scrollArea->setWidget(scrollContent);
 	m_stack->addWidget(m_scrollArea);
+
+	// Timers are reordered by dragging their grip; the order is saved once
+	// the drag ends
+	m_reorder = new DragReorderController(
+		m_scrollArea,
+		[this]() {
+			QList<QWidget *> items;
+			for (auto *timer : m_timers)
+				items.append(timer);
+			return items;
+		},
+		[this](int from, int to) {
+			m_timers.move(from, to);
+			RelayoutTimers();
+		},
+		[this]() {
+			RefreshListState();
+			SaveSettings();
+		},
+		this);
 
 	// Bottom toolbar, mirroring the native OBS dock toolbars (Sources,
 	// Scenes, Audio Mixer). The theme's "icon-*" class rules render these
@@ -174,6 +195,8 @@ TimerWidget *TMinusDock::AddTimer(obs_data_t *savedData, int index)
 {
 	auto *timer = new TimerWidget(this, savedData);
 	timer->SetCompact(m_compact);
+	for (DragHandle *handle : timer->dragHandles())
+		m_reorder->Attach(handle, timer);
 
 	connect(timer, &TimerWidget::removeRequested, this, &TMinusDock::RemoveTimer);
 	connect(timer, &TimerWidget::duplicateRequested, this, &TMinusDock::DuplicateTimer);

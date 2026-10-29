@@ -14,6 +14,9 @@
 
 #include "../core/timer-data.hpp"
 
+class DragHandle;
+class DragReorderController;
+
 // One end-action step, edited in place. The card owns a copy of the step
 // and writes every field change straight into it.
 class ActionStepCard : public QFrame {
@@ -23,6 +26,7 @@ public:
 	explicit ActionStepCard(const ActionStep &step, QWidget *parent = nullptr);
 
 	const ActionStep &step() const { return m_step; }
+	DragHandle *dragHandle() const { return m_dragHandle; }
 	void SetPosition(int index, int count);
 
 	static QString TypeName(ActionType type);
@@ -47,10 +51,13 @@ private:
 	void UpdateWarning();
 	QComboBox *AddCombo(const QString &accessibleName, int stretch = 1);
 
+	void ShowMenu(const QPoint &globalPos);
+
 	ActionStep m_step;
+	DragHandle *m_dragHandle;
 	QLabel *m_numberLabel;
-	QPushButton *m_upBtn;
-	QPushButton *m_downBtn;
+	int m_index = 0;
+	int m_count = 0;
 	QHBoxLayout *m_fieldsRow;
 	QLabel *m_warningLabel;
 	QStringList m_missing;
@@ -80,4 +87,5 @@ private:
 	QLabel *m_emptyLabel;
 	QPushButton *m_addBtn;
 	QList<ActionStepCard *> m_cards;
+	DragReorderController *m_reorder;
 };

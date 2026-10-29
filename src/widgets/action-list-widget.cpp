@@ -1,4 +1,5 @@
 #include "action-list-widget.hpp"
+#include "drag-reorder.hpp"
 
 #include <obs.h>
 #include <obs-frontend-api.h>
@@ -175,6 +176,8 @@ ActionStepCard::ActionStepCard(const ActionStep &step, QWidget *parent) : QFrame
 
 	auto *header = new QHBoxLayout();
 	header->setSpacing(6);
+	m_dragHandle = new DragHandle(this);
+	header->addWidget(m_dragHandle);
 	m_numberLabel = new QLabel(this);
 	m_numberLabel->setFixedSize(20, 20);
 	m_numberLabel->setAlignment(Qt::AlignCenter);
@@ -186,11 +189,7 @@ ActionStepCard::ActionStepCard(const ActionStep &step, QWidget *parent) : QFrame
 	title->setStyleSheet("font-weight: bold;");
 	header->addWidget(title, 1);
 
-	m_upBtn = IconButton("upArrowIconSmall", "icon-up", "Move Up", this);
-	m_downBtn = IconButton("downArrowIconSmall", "icon-down", "Move Down", this);
 	auto *removeBtn = IconButton("removeIconSmall", "icon-trash", "Remove Step", this);
-	header->addWidget(m_upBtn);
-	header->addWidget(m_downBtn);
 	header->addWidget(removeBtn);
 	layout->addLayout(header);
 
@@ -204,8 +203,11 @@ ActionStepCard::ActionStepCard(const ActionStep &step, QWidget *parent) : QFrame
 	m_warningLabel->hide();
 	layout->addWidget(m_warningLabel);
 
-	connect(m_upBtn, &QPushButton::clicked, this, [this]() { emit moveUpRequested(this); });
-	connect(m_downBtn, &QPushButton::clicked, this, [this]() { emit moveDownRequested(this); });
+	// Dragging the grip is the main way to reorder; the context menu keeps
+	// a keyboard-reachable alternative
+	setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(this, &QWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { ShowMenu(mapToGlobal(pos)); });
 	connect(removeBtn, &QPushButton::clicked, this, [this]() { emit removeRequested(this); });
 
 	BuildFields();
@@ -234,8 +236,20 @@ QString ActionStepCard::TypeName(ActionType type)
 void ActionStepCard::SetPosition(int index, int count)
 {
 	m_numberLabel->setText(QString::number(index + 1));
-	m_upBtn->setEnabled(index > 0);
-	m_downBtn->setEnabled(index < count - 1);
+	m_index = index;
+	m_count = count;
+}
+
+void ActionStepCard::ShowMenu(const QPoint &globalPos)
+{
+	QMenu menu(this);
+	menu.addAction("Move Up", this, [this]() { emit moveUpRequested(this); })->setEnabled(m_index > 0);
+	menu.addAction("Move Down", this, [this]() {
+		    emit moveDownRequested(this);
+	    })->setEnabled(m_index < m_count - 1);
+	menu.addSeparator();
+	menu.addAction("Remove Step", this, [this]() { emit removeRequested(this); });
+	menu.exec(globalPos);
 }
 
 QComboBox *ActionStepCard::AddCombo(const QString &accessibleName, int stretch)
@@ -444,6 +458,20 @@ ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
 	m_cardsLayout->addStretch();
 
 	m_scroll->setWidget(content);
+
+	m_reorder = new DragReorderController(
+		m_scroll,
+		[this]() {
+			QList<QWidget *> items;
+			for (auto *card : m_cards)
+				items.append(card);
+			return items;
+		},
+		[this](int from, int to) {
+			m_cards.move(from, to);
+			Relayout();
+		},
+		[this]() { emit stepsChanged(); }, this);
 	mainLayout->addWidget(m_scroll, 1);
 
 	m_addBtn = new QPushButton("Add Step", this);
@@ -499,6 +527,7 @@ void ActionListWidget::AddCard(const ActionStep &step)
 	connect(card, &ActionStepCard::moveUpRequested, this, [this](ActionStepCard *c) { MoveCard(c, -1); });
 	connect(card, &ActionStepCard::moveDownRequested, this, [this](ActionStepCard *c) { MoveCard(c, 1); });
 	connect(card, &ActionStepCard::removeRequested, this, &ActionListWidget::RemoveCard);
+	m_reorder->Attach(card->dragHandle(), card);
 	m_cards.append(card);
 	Relayout();
 }

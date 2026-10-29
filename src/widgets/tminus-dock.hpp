@@ -16,6 +16,8 @@
 
 Q_DECLARE_OPAQUE_POINTER(obs_data_t *)
 
+class DragReorderController;
+
 class TMinusDock : public OBSDock {
 	Q_OBJECT
 
@@ -68,6 +70,7 @@ private:
 	QToolButton *m_compactBtn;
 
 	QList<TimerWidget *> m_timers;
+	DragReorderController *m_reorder;
 
 	int m_startAllHotkeyId = -1;
 	int m_pauseAllHotkeyId = -1;

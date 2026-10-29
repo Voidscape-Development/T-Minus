@@ -13,6 +13,7 @@
 #include "../core/timer-engine.hpp"
 
 class ActionExecutor;
+class DragHandle;
 
 class TimerWidget : public QWidget {
 	Q_OBJECT
@@ -50,6 +51,9 @@ public:
 
 	void SetCompact(bool compact);
 	void SetMoveEnabled(bool canMoveUp, bool canMoveDown);
+
+	// Grips for drag-to-reorder, one per layout mode
+	QList<DragHandle *> dragHandles() const { return {m_dragHandle, m_compactDragHandle}; }
 
 	TimerData &data() { return m_data; }
 	const QString &timerId() const { return m_data.timerId; }
@@ -97,6 +101,8 @@ private:
 	bool m_canMoveDown = false;
 
 	QFrame *m_card;
+	DragHandle *m_dragHandle;
+	DragHandle *m_compactDragHandle;
 
 	// Comfortable layout
 	QWidget *m_full;

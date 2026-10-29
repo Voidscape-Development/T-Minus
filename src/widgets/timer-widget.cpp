@@ -1,5 +1,6 @@
 #include "timer-widget.hpp"
 #include "timer-settings-dialog.hpp"
+#include "drag-reorder.hpp"
 #include "../core/action-executor.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../utils/format-utils.hpp"
@@ -150,6 +151,8 @@ void TimerWidget::SetupUI()
 
 	auto *header = new QHBoxLayout();
 	header->setSpacing(6);
+	m_dragHandle = new DragHandle(m_full);
+	header->addWidget(m_dragHandle);
 	m_statusPill = new QLabel(m_full);
 	m_statusPill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 	m_statusPill->setFixedHeight(18);
@@ -214,7 +217,9 @@ void TimerWidget::SetupUI()
 	// --- Compact layout: one row per timer ---
 	m_compactRow = new QWidget(m_card);
 	auto *row = new QHBoxLayout(m_compactRow);
-	row->setContentsMargins(8, 4, 4, 4);
+	row->setContentsMargins(4, 4, 4, 4);
+	m_compactDragHandle = new DragHandle(m_compactRow);
+	row->addWidget(m_compactDragHandle);
 	row->setSpacing(8);
 	m_compactDot = new QLabel(m_compactRow);
 	m_compactDot->setFixedSize(8, 8);

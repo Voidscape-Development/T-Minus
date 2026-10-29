@@ -56,6 +56,8 @@ target_sources(
     src/widgets/timer-settings-dialog.cpp
     src/widgets/action-list-widget.hpp
     src/widgets/action-list-widget.cpp
+    src/widgets/drag-reorder.hpp
+    src/widgets/drag-reorder.cpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
