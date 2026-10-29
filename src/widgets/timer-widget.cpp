@@ -644,23 +644,23 @@ void TimerWidget::OpenSettings()
 {
 	TimerSettingsDialog dialog(m_data, this);
 	if (dialog.exec() == QDialog::Accepted) {
-		const QString oldName = m_data.displayName;
+		// Re-register every hotkey around the change, carrying the key
+		// bindings over: descriptions pick up a new name, edited add-time
+		// amounts get new callbacks, and removed entries are dropped.
+		obs_data_t *bindings = obs_data_create();
+		SaveHotkeyBindings(bindings);
+		UnregisterHotkeys();
+
 		dialog.ApplyToData(m_data);
+
+		RegisterHotkeys(bindings);
+		obs_data_release(bindings);
 
 		m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
 		UpdateHeaderLabels();
 		UpdateSubLabel();
 		UpdateMeta();
 		UpdateDisplay(m_engine->currentTimeMs());
-
-		if (m_data.displayName != oldName) {
-			// Re-register (preserving bindings) so hotkey
-			// descriptions pick up the new name.
-			ReregisterAllHotkeys();
-		} else {
-			// Register any add-time hotkeys created in the dialog.
-			RegisterHotkeys(nullptr);
-		}
 		RebuildNudgeButtons();
 
 		emit settingsChanged();
@@ -734,23 +734,14 @@ void TimerWidget::RegisterHotkeys(obs_data_t *savedData)
 	}
 }
 
-void TimerWidget::ReregisterAllHotkeys()
+void TimerWidget::SaveHotkeyBindings(obs_data_t *bindings)
 {
-	// Preserve current key bindings across the unregister/register cycle
-	// (used when the timer is renamed so hotkey descriptions stay fresh).
-	obs_data_t *bindings = obs_data_create();
-
 	SaveHotkey(bindings, m_data.startPauseHotkeyId, ("TMinus_StartPause_" + m_data.timerId.toStdString()).c_str());
 	SaveHotkey(bindings, m_data.restartHotkeyId, ("TMinus_Restart_" + m_data.timerId.toStdString()).c_str());
 	for (const auto &entry : m_data.addTimeHotkeys) {
 		if (!entry.hotkeyRegistrationName.isEmpty())
 			SaveHotkey(bindings, entry.hotkeyId, entry.hotkeyRegistrationName.toUtf8().constData());
 	}
-
-	UnregisterHotkeys();
-	RegisterHotkeys(bindings);
-
-	obs_data_release(bindings);
 }
 
 void TimerWidget::UnregisterHotkeys()

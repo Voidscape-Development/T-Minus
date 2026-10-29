@@ -22,6 +22,10 @@ public:
 	void setActions(const QList<ActionStep> &actions);
 	QList<ActionStep> actions() const;
 
+signals:
+	// Emitted when steps are added, removed or reordered
+	void stepsChanged();
+
 private slots:
 	void OnAddAction(ActionType type);
 	void OnRemoveAction();

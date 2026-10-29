@@ -277,6 +277,8 @@ void ActionListWidget::OnAddAction(ActionType type)
 	// entries; store those so the step does what the editor shows.
 	SaveEditorIntoStep(row);
 	UpdateListDisplay();
+
+	emit stepsChanged();
 }
 
 void ActionListWidget::OnRemoveAction()
@@ -293,6 +295,8 @@ void ActionListWidget::OnRemoveAction()
 	} else {
 		OnSelectionChanged();
 	}
+
+	emit stepsChanged();
 }
 
 void ActionListWidget::OnMoveUp()
@@ -304,6 +308,8 @@ void ActionListWidget::OnMoveUp()
 	m_actions.swapItemsAt(row, row - 1);
 	UpdateListDisplay();
 	m_listWidget->setCurrentRow(row - 1);
+
+	emit stepsChanged();
 }
 
 void ActionListWidget::OnMoveDown()
@@ -315,6 +321,8 @@ void ActionListWidget::OnMoveDown()
 	m_actions.swapItemsAt(row, row + 1);
 	UpdateListDisplay();
 	m_listWidget->setCurrentRow(row + 1);
+
+	emit stepsChanged();
 }
 
 void ActionListWidget::OnSelectionChanged()

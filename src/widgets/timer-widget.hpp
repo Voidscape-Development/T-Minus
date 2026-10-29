@@ -32,7 +32,9 @@ public:
 	void InitAsType(TimerType type);
 
 	void RegisterHotkeys(obs_data_t *savedData);
-	void ReregisterAllHotkeys();
+	// Current key bindings, keyed by registration name, in the form
+	// RegisterHotkeys() restores them from
+	void SaveHotkeyBindings(obs_data_t *bindings);
 	void UnregisterHotkeys();
 
 	// Stop the tick timer and cancel any in-progress end-action sequence.
