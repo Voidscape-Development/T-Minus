@@ -105,6 +105,7 @@ TimerWidget::TimerWidget(QWidget *parent, obs_data_t *savedData) : QWidget(paren
 	} else {
 		m_data.timerId = GenerateUniqueID();
 		m_data.countdownDuration = {0, 0, 5, 0};
+		m_data.display.autoUnits = true;
 	}
 
 	SetupUI();
@@ -539,6 +540,8 @@ void TimerWidget::OnStateChanged(TimerState newState)
 	// A new run may have picked up a pending configuration
 	UpdateSubLabel();
 	UpdateStateVisuals();
+	// Swaps the finished text in or out of the source
+	UpdateDisplay(m_engine->currentTimeMs());
 	emit stateChanged(newState);
 }
 
@@ -563,7 +566,12 @@ void TimerWidget::UpdateDisplay(long long timeMs)
 	m_progress->setVisible(showProgress);
 	m_compactProgress->setVisible(showProgress && m_compact);
 
-	UpdateSourceText(displayText);
+	// Once finished, the source shows the timer's finished text if it has
+	// one. End actions run after this, so a Set Text step still wins.
+	if (m_engine->state() == TimerState::Finished && !m_data.finishedText.isEmpty())
+		UpdateSourceText(m_data.finishedText);
+	else
+		UpdateSourceText(displayText);
 }
 
 void TimerWidget::UpdateSourceText(const QString &text)
@@ -781,11 +789,14 @@ void TimerWidget::SaveData(obs_data_t *obj)
 	// Text source
 	obs_data_set_string(obj, "selectedTextSource", m_data.selectedTextSource.toUtf8().constData());
 
+	obs_data_set_string(obj, "finishedText", m_data.finishedText.toUtf8().constData());
+
 	// Stream behavior
 	obs_data_set_bool(obj, "startOnStreamStart", m_data.startOnStreamStart);
 	obs_data_set_bool(obj, "resetOnStreamStart", m_data.resetOnStreamStart);
 
 	// Display format
+	obs_data_set_bool(obj, "autoUnits", m_data.display.autoUnits);
 	obs_data_set_bool(obj, "showDays", m_data.display.showDays);
 	obs_data_set_bool(obj, "showHours", m_data.display.showHours);
 	obs_data_set_bool(obj, "showMinutes", m_data.display.showMinutes);
@@ -854,9 +865,12 @@ void TimerWidget::LoadData(obs_data_t *obj)
 
 	m_data.selectedTextSource = obs_data_get_string(obj, "selectedTextSource");
 
+	m_data.finishedText = obs_data_get_string(obj, "finishedText");
+
 	m_data.startOnStreamStart = obs_data_get_bool(obj, "startOnStreamStart");
 	m_data.resetOnStreamStart = obs_data_get_bool(obj, "resetOnStreamStart");
 
+	m_data.display.autoUnits = obs_data_get_bool(obj, "autoUnits");
 	m_data.display.showDays = obs_data_get_bool(obj, "showDays");
 	m_data.display.showHours = obs_data_get_bool(obj, "showHours");
 	m_data.display.showMinutes = obs_data_get_bool(obj, "showMinutes");

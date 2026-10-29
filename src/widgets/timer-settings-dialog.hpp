@@ -17,6 +17,8 @@
 #include "../core/timer-data.hpp"
 #include "action-list-widget.hpp"
 
+class ActionExecutor;
+
 class TimerSettingsDialog : public QDialog {
 	Q_OBJECT
 
@@ -87,9 +89,11 @@ private:
 	QCheckBox *m_showMinutesCheck;
 	QCheckBox *m_showSecondsCheck;
 	QCheckBox *m_leadingZeroCheck;
+	QLineEdit *m_finishedTextEdit;
 
 	// On finish page
 	ActionListWidget *m_actionList;
+	ActionExecutor *m_testExecutor;
 
 	// Hotkeys page. Rows line up with m_addTimeEntries, which carries
 	// each entry's registration name.

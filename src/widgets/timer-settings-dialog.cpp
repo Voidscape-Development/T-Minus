@@ -1,4 +1,5 @@
 #include "timer-settings-dialog.hpp"
+#include "../core/action-executor.hpp"
 #include "../utils/format-utils.hpp"
 
 #include <obs.h>
@@ -23,7 +24,7 @@ enum Page { TimerPage = 0, OutputPage, FinishPage, HotkeysPage };
 enum StreamStart { StreamNothing = 0, StreamStart, StreamRestart, StreamReset };
 
 // Time format presets; Custom exposes the individual unit checkboxes
-enum Units { UnitsHMS = 0, UnitsMS, UnitsDHMS, UnitsSeconds, UnitsCustom };
+enum Units { UnitsAuto = 0, UnitsHMS, UnitsMS, UnitsDHMS, UnitsSeconds, UnitsCustom };
 
 const char *kMutedStyle = "color: rgba(127, 127, 127, 100%);";
 
@@ -341,6 +342,7 @@ QWidget *TimerSettingsDialog::CreateOutputPage()
 
 	layout->addWidget(SectionLabel("Time format", page));
 	m_unitsCombo = new QComboBox(page);
+	m_unitsCombo->addItem("Auto (hide hours and days while they're zero)", UnitsAuto);
 	m_unitsCombo->addItem("H:MM:SS", UnitsHMS);
 	m_unitsCombo->addItem("MM:SS", UnitsMS);
 	m_unitsCombo->addItem("D:HH:MM:SS", UnitsDHMS);
@@ -365,12 +367,23 @@ QWidget *TimerSettingsDialog::CreateOutputPage()
 
 	m_leadingZeroCheck = new QCheckBox("Pad the first unit (05:00 instead of 5:00)", page);
 	layout->addWidget(m_leadingZeroCheck);
+	layout->addSpacing(10);
+
+	layout->addWidget(SectionLabel("When finished, show", page));
+	m_finishedTextEdit = new QLineEdit(page);
+	m_finishedTextEdit->setPlaceholderText("e.g. We're live!");
+	m_finishedTextEdit->setMaxLength(256);
+	layout->addWidget(m_finishedTextEdit);
+	layout->addWidget(HintLabel("Replaces the time in the text source once the timer ends, until it's reset. "
+				    "Leave empty to keep showing the final time.",
+				    page));
 
 	layout->addStretch();
 
 	connect(m_textSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
 		&TimerSettingsDialog::UpdatePreview);
 	connect(m_templateEdit, &QLineEdit::textChanged, this, &TimerSettingsDialog::UpdatePreview);
+	connect(m_finishedTextEdit, &QLineEdit::textChanged, this, &TimerSettingsDialog::UpdatePreview);
 	connect(m_unitsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
 		&TimerSettingsDialog::UpdateUnitsVisibility);
 	for (QCheckBox *check :
@@ -387,12 +400,31 @@ QWidget *TimerSettingsDialog::CreateFinishPage()
 	layout->setContentsMargins(16, 14, 16, 14);
 	layout->setSpacing(6);
 
-	layout->addWidget(SectionLabel("When the timer reaches zero", page));
-	layout->addWidget(HintLabel("Steps run top to bottom. Resetting or restarting the timer cancels a run that "
-				    "is still in progress. Set Text steps write to the timer's text source and "
-				    "support %time%.",
-				    page));
+	auto *header = new QHBoxLayout();
+	auto *intro = new QVBoxLayout();
+	intro->setSpacing(4);
+	intro->addWidget(SectionLabel("When the timer reaches zero", page));
+	intro->addWidget(HintLabel("Steps run top to bottom. Resetting or restarting the timer cancels a run that "
+				   "is still in progress. Set Text steps write to the timer's text source and "
+				   "support %time%.",
+				   page));
+	header->addLayout(intro, 1);
+
+	auto *testBtn = new QPushButton("Test Run", page);
+	testBtn->setAutoDefault(false);
+	testBtn->setToolTip("Run these steps now, on your live scenes and sources");
+	header->addWidget(testBtn, 0, Qt::AlignTop);
+	layout->addLayout(header);
 	layout->addSpacing(4);
+
+	// Owned by the dialog, so closing it cancels a test that's mid-Wait
+	m_testExecutor = new ActionExecutor(this);
+	connect(testBtn, &QPushButton::clicked, this, [this]() {
+		DisplayFormat timeOnly = SelectedFormat();
+		timeOnly.useFormatString = false;
+		m_testExecutor->execute(m_actionList->actions(), m_textSourceCombo->currentData().toString(),
+					FormatTimerDisplay(timeOnly, 0));
+	});
 
 	m_actionList = new ActionListWidget(page);
 	layout->addWidget(m_actionList, 1);
@@ -515,9 +547,13 @@ void TimerSettingsDialog::LoadFromData(const TimerData &data)
 	m_showSecondsCheck->setChecked(data.display.showSeconds);
 	m_leadingZeroCheck->setChecked(data.display.showLeadingZero);
 
+	m_finishedTextEdit->setText(data.finishedText);
+
 	const DisplayFormat &d = data.display;
 	int units = UnitsCustom;
-	if (!d.showDays && d.showHours && d.showMinutes && d.showSeconds)
+	if (d.autoUnits)
+		units = UnitsAuto;
+	else if (!d.showDays && d.showHours && d.showMinutes && d.showSeconds)
 		units = UnitsHMS;
 	else if (!d.showDays && !d.showHours && d.showMinutes && d.showSeconds)
 		units = UnitsMS;
@@ -582,6 +618,9 @@ DisplayFormat TimerSettingsDialog::SelectedFormat() const
 	DisplayFormat fmt;
 
 	switch (m_unitsCombo->currentData().toInt()) {
+	case UnitsAuto:
+		fmt.autoUnits = true;
+		break;
 	case UnitsHMS:
 		fmt.showDays = false;
 		fmt.showHours = fmt.showMinutes = fmt.showSeconds = true;
@@ -694,8 +733,11 @@ void TimerSettingsDialog::UpdatePreview()
 	m_previewLabel->setText(FormatTimerDisplay(SelectedFormat(), ms));
 
 	const QString source = m_textSourceCombo->currentData().toString();
-	m_previewSourceLabel->setText(source.isEmpty() ? QString("Not shown on stream")
-						       : QString::fromUtf8("→ %1").arg(source));
+	QString where = source.isEmpty() ? QString("Not shown on stream") : QString::fromUtf8("→ %1").arg(source);
+	const QString finished = m_finishedTextEdit->text();
+	if (!source.isEmpty() && !finished.isEmpty())
+		where += QString::fromUtf8(" · then “%1”").arg(finished);
+	m_previewSourceLabel->setText(where);
 }
 
 void TimerSettingsDialog::UpdateNavCounts()
@@ -720,6 +762,7 @@ void TimerSettingsDialog::ApplyToData(TimerData &data) const
 
 	data.selectedTextSource = m_textSourceCombo->currentData().toString();
 	data.display = SelectedFormat();
+	data.finishedText = m_finishedTextEdit->text();
 
 	data.endActions = m_actionList->actions();
 
