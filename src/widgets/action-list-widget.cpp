@@ -131,7 +131,10 @@ void ActionListWidget::SetupUI()
 
 	// Stacked edit forms
 	m_editStack = new QStackedWidget(this);
+	m_editStack->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
 	mainLayout->addWidget(m_editStack);
+	// Keep the editor fields together under the step header
+	mainLayout->addStretch();
 
 	// Connections
 	connect(m_removeBtn, &QPushButton::clicked, this, &ActionListWidget::OnRemoveAction);
@@ -152,6 +155,7 @@ void ActionListWidget::SetupEditForms()
 	m_setTextEdit = new QLineEdit();
 	m_setTextEdit->setPlaceholderText("Text to display (supports %time%)");
 	setTextLayout->addWidget(m_setTextEdit);
+	setTextLayout->addStretch();
 	m_editStack->addWidget(setTextPage);
 
 	connect(m_setTextEdit, &QLineEdit::textChanged, this, &ActionListWidget::OnEditFieldChanged);
@@ -169,6 +173,7 @@ void ActionListWidget::SetupEditForms()
 	m_filterEnabledCheck = new QCheckBox("Enable filter (uncheck to disable)");
 	m_filterEnabledCheck->setChecked(true);
 	filterLayout->addWidget(m_filterEnabledCheck);
+	filterLayout->addStretch();
 	m_editStack->addWidget(filterPage);
 
 	connect(m_filterSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
@@ -186,6 +191,7 @@ void ActionListWidget::SetupEditForms()
 	sceneLayout->addWidget(new QLabel("Scene:"));
 	m_sceneCombo = new QComboBox();
 	sceneLayout->addWidget(m_sceneCombo);
+	sceneLayout->addStretch();
 	m_editStack->addWidget(scenePage);
 
 	connect(m_sceneCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -202,6 +208,7 @@ void ActionListWidget::SetupEditForms()
 	m_delaySpin->setValue(1000);
 	m_delaySpin->setSuffix(" ms");
 	delayLayout->addWidget(m_delaySpin);
+	delayLayout->addStretch();
 	m_editStack->addWidget(delayPage);
 
 	connect(m_delaySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ActionListWidget::OnEditFieldChanged);
@@ -214,6 +221,7 @@ void ActionListWidget::SetupEditForms()
 	m_globalHotkeyCombo = new QComboBox();
 	m_globalHotkeyCombo->setEditable(true);
 	globalHkLayout->addWidget(m_globalHotkeyCombo);
+	globalHkLayout->addStretch();
 	m_editStack->addWidget(globalHkPage);
 
 	connect(m_globalHotkeyCombo, &QComboBox::currentTextChanged, this, &ActionListWidget::OnEditFieldChanged);
@@ -229,6 +237,7 @@ void ActionListWidget::SetupEditForms()
 	m_sourceHotkeyNameCombo = new QComboBox();
 	m_sourceHotkeyNameCombo->setEditable(true);
 	srcHkLayout->addWidget(m_sourceHotkeyNameCombo);
+	srcHkLayout->addStretch();
 	m_editStack->addWidget(srcHkPage);
 
 	connect(m_sourceHotkeySourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {

@@ -52,7 +52,6 @@ target_sources(
     src/widgets/tminus-dock.cpp
     src/widgets/timer-widget.hpp
     src/widgets/timer-widget.cpp
-    src/widgets/timer-widget.ui
     src/widgets/timer-settings-dialog.hpp
     src/widgets/timer-settings-dialog.cpp
     src/widgets/action-list-widget.hpp
