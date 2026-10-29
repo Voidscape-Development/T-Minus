@@ -1,5 +1,6 @@
 #include "tminus-dock.hpp"
 #include "drag-reorder.hpp"
+#include "button-style.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../plugin-support.h"
 
@@ -83,16 +84,19 @@ void TMinusDock::SetupUI()
 	// Scenes, Audio Mixer). The theme's "icon-*" class rules render these
 	// as flat themed icon buttons; themeID covers legacy themes.
 	auto *toolbar = new QHBoxLayout();
-	toolbar->setContentsMargins(4, 2, 4, 2);
-	toolbar->setSpacing(2);
+	toolbar->setContentsMargins(4, 4, 4, 4);
+	toolbar->setSpacing(4);
 
-	m_addBtn = new QPushButton(this);
-	m_addBtn->setFixedSize(24, 24);
-	m_addBtn->setFlat(true);
-	m_addBtn->setProperty("themeID", "addIconSmall");
-	m_addBtn->setProperty("class", "icon-plus");
-	m_addBtn->setToolTip("Add Timer");
-	m_addBtn->setAccessibleName("Add Timer");
+	auto toolbarButton = [this](const char *themeID, const char *cls, const QString &tip) {
+		auto *btn = new QPushButton(this);
+		btn->setFlat(true);
+		btn->setToolTip(tip);
+		btn->setAccessibleName(tip);
+		StyleIconButton(btn, ButtonSize::Toolbar, themeID, cls);
+		return btn;
+	};
+
+	m_addBtn = toolbarButton("addIconSmall", "icon-plus", "Add Timer");
 	toolbar->addWidget(m_addBtn);
 
 	toolbar->addStretch();
@@ -102,31 +106,17 @@ void TMinusDock::SetupUI()
 	toolbar->addWidget(m_runningLabel);
 	toolbar->addSpacing(4);
 
-	m_startAllBtn = new QPushButton(this);
-	m_startAllBtn->setFixedSize(24, 24);
-	m_startAllBtn->setFlat(true);
-	m_startAllBtn->setProperty("themeID", "playIcon");
-	m_startAllBtn->setProperty("class", "icon-media-play");
-	m_startAllBtn->setToolTip("Start All Timers");
-	m_startAllBtn->setAccessibleName("Start All Timers");
+	m_startAllBtn = toolbarButton("playIcon", "icon-media-play", "Start All Timers");
 	toolbar->addWidget(m_startAllBtn);
 
-	m_pauseAllBtn = new QPushButton(this);
-	m_pauseAllBtn->setFixedSize(24, 24);
-	m_pauseAllBtn->setFlat(true);
-	m_pauseAllBtn->setProperty("themeID", "pauseIcon");
-	m_pauseAllBtn->setProperty("class", "icon-media-pause");
-	m_pauseAllBtn->setToolTip("Pause All Timers");
-	m_pauseAllBtn->setAccessibleName("Pause All Timers");
+	m_pauseAllBtn = toolbarButton("pauseIcon", "icon-media-pause", "Pause All Timers");
 	toolbar->addWidget(m_pauseAllBtn);
 
-	m_compactBtn = new QToolButton(this);
-	m_compactBtn->setFixedSize(24, 24);
-	m_compactBtn->setAutoRaise(true);
+	// A plain button like its neighbours (a QToolButton gets different
+	// theme padding and sizing), with a drawn icon since themes have none
+	m_compactBtn = toolbarButton(nullptr, nullptr, "Compact View");
 	m_compactBtn->setCheckable(true);
-	m_compactBtn->setText(QString::fromUtf8("≡"));
-	m_compactBtn->setToolTip("Compact View");
-	m_compactBtn->setAccessibleName("Compact View");
+	m_compactBtn->setIcon(ListIcon(palette().color(QPalette::ButtonText)));
 	toolbar->addWidget(m_compactBtn);
 
 	mainLayout->addLayout(toolbar);
@@ -135,7 +125,7 @@ void TMinusDock::SetupUI()
 	connect(m_addBtn, &QPushButton::clicked, this, &TMinusDock::ShowAddMenu);
 	connect(m_startAllBtn, &QPushButton::clicked, this, &TMinusDock::StartAllTimers);
 	connect(m_pauseAllBtn, &QPushButton::clicked, this, &TMinusDock::PauseAllTimers);
-	connect(m_compactBtn, &QToolButton::toggled, this, [this](bool checked) {
+	connect(m_compactBtn, &QPushButton::toggled, this, [this](bool checked) {
 		SetCompact(checked);
 		SaveSettings();
 	});

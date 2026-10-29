@@ -1,6 +1,7 @@
 #include "timer-widget.hpp"
 #include "timer-settings-dialog.hpp"
 #include "drag-reorder.hpp"
+#include "button-style.hpp"
 #include "../core/action-executor.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../utils/format-utils.hpp"
@@ -165,8 +166,7 @@ void TimerWidget::SetupUI()
 	header->addWidget(m_typeLabel);
 	m_menuBtn = new QPushButton(m_full);
 	m_menuBtn->setFlat(true);
-	m_menuBtn->setFixedSize(22, 22);
-	SetIconClass(m_menuBtn, "menuIconSmall", "icon-dots-vert");
+	StyleIconButton(m_menuBtn, ButtonSize::Header, "menuIconSmall", "icon-dots-vert");
 	m_menuBtn->setToolTip("More actions");
 	m_menuBtn->setAccessibleName("More actions");
 	header->addWidget(m_menuBtn);
@@ -197,7 +197,7 @@ void TimerWidget::SetupUI()
 	auto *controls = new QHBoxLayout();
 	controls->setSpacing(4);
 	m_primaryBtn = new QPushButton(m_full);
-	m_primaryBtn->setMinimumHeight(28);
+	StyleTextButton(m_primaryBtn, kControlRowHeight);
 	controls->addWidget(m_primaryBtn, 1);
 	m_nudgeBox = new QWidget(m_full);
 	auto *nudgeLayout = new QHBoxLayout(m_nudgeBox);
@@ -205,10 +205,9 @@ void TimerWidget::SetupUI()
 	nudgeLayout->setSpacing(4);
 	controls->addWidget(m_nudgeBox);
 	m_restartBtn = new QPushButton(m_full);
-	m_restartBtn->setFixedSize(28, 28);
 	m_restartBtn->setToolTip("Reset");
 	m_restartBtn->setAccessibleName("Reset");
-	SetIconClass(m_restartBtn, "restartIcon", "icon-media-restart");
+	StyleIconButton(m_restartBtn, QSize(36, kControlRowHeight), "restartIcon", "icon-media-restart");
 	controls->addWidget(m_restartBtn);
 	full->addLayout(controls);
 
@@ -230,8 +229,8 @@ void TimerWidget::SetupUI()
 	m_compactTime->setFont(TimeFont(font(), 16));
 	row->addWidget(m_compactTime);
 	m_compactBtn = new QPushButton(m_compactRow);
-	m_compactBtn->setFixedSize(26, 26);
-	row->addWidget(m_compactBtn);
+	StyleIconButton(m_compactBtn, ButtonSize::Inline);
+	row->addWidget(m_compactBtn, 0, Qt::AlignVCenter);
 	cardLayout->addWidget(m_compactRow);
 
 	m_compactProgress = new QProgressBar(m_card);
@@ -274,7 +273,7 @@ void TimerWidget::RebuildNudgeButtons()
 	for (int i = 0; i < entries.size() && i < 3; i++) {
 		const int deltaMs = entries[i].deltaSeconds * 1000;
 		auto *btn = new QPushButton(FormatDelta(entries[i].deltaSeconds), m_nudgeBox);
-		btn->setMinimumHeight(28);
+		StyleTextButton(btn, kControlRowHeight);
 		btn->setToolTip(entries[i].label);
 		connect(btn, &QPushButton::clicked, this, [this, deltaMs]() { m_engine->addTime(deltaMs); });
 		m_nudgeBox->layout()->addWidget(btn);

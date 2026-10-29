@@ -1,5 +1,6 @@
 #include "action-list-widget.hpp"
 #include "drag-reorder.hpp"
+#include "button-style.hpp"
 
 #include <obs.h>
 #include <obs-frontend-api.h>
@@ -152,9 +153,7 @@ QPushButton *IconButton(const char *themeID, const char *cls, const QString &tip
 {
 	auto *btn = new QPushButton(parent);
 	btn->setFlat(true);
-	btn->setFixedSize(22, 22);
-	btn->setProperty("themeID", themeID);
-	btn->setProperty("class", cls);
+	StyleIconButton(btn, ButtonSize::Inline, themeID, cls);
 	btn->setToolTip(tip);
 	btn->setAccessibleName(tip);
 	return btn;

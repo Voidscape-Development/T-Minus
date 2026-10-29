@@ -9,7 +9,6 @@
 #include <QVBoxLayout>
 #include <QScrollArea>
 #include <QPushButton>
-#include <QToolButton>
 #include <QStackedWidget>
 #include <QLabel>
 #include <QList>
@@ -67,7 +66,7 @@ private:
 	QLabel *m_runningLabel;
 	QPushButton *m_startAllBtn;
 	QPushButton *m_pauseAllBtn;
-	QToolButton *m_compactBtn;
+	QPushButton *m_compactBtn;
 
 	QList<TimerWidget *> m_timers;
 	DragReorderController *m_reorder;
