@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMenu>
 
 // The hotkey combos display the translated hotkey description
 // (obs_hotkey_get_description) while carrying the registration name in the
@@ -68,6 +69,23 @@ static QString HotkeyDisplayName(const QString &name)
 	return search.description.isEmpty() ? name : search.description;
 }
 
+// Select name in combo. A saved name that isn't available right now (e.g.
+// the scene was deleted) is kept as an extra entry rather than silently
+// replaced by whatever item happens to be first, so the editor never shows
+// a value other than the one that will be saved.
+static void SelectOrKeep(QComboBox *combo, const QString &name)
+{
+	if (name.isEmpty())
+		return;
+	int idx = combo->findText(name);
+	if (idx < 0) {
+		combo->addItem(name);
+		idx = combo->count() - 1;
+		combo->setItemData(idx, QStringLiteral("Not found in the current scene collection"), Qt::ToolTipRole);
+	}
+	combo->setCurrentIndex(idx);
+}
+
 ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
 {
 	SetupUI();
@@ -86,7 +104,15 @@ void ActionListWidget::SetupUI()
 	// Buttons row
 	auto *btnRow = new QHBoxLayout();
 
-	m_addBtn = new QPushButton("Add", this);
+	// Adding picks the type up front; a step's type is fixed once created
+	// (remove it and add another to change it).
+	m_addBtn = new QPushButton("Add Step", this);
+	auto *addMenu = new QMenu(m_addBtn);
+	for (ActionType type : {ActionType::SwitchScene, ActionType::EnableFilter, ActionType::SetText,
+				ActionType::TriggerGlobalHotkey, ActionType::TriggerSourceHotkey, ActionType::Delay}) {
+		addMenu->addAction(ActionTypeName(type), this, [this, type]() { OnAddAction(type); });
+	}
+	m_addBtn->setMenu(addMenu);
 	m_removeBtn = new QPushButton("Remove", this);
 	m_moveUpBtn = new QPushButton("Up", this);
 	m_moveDownBtn = new QPushButton("Down", this);
@@ -98,31 +124,22 @@ void ActionListWidget::SetupUI()
 	btnRow->addWidget(m_moveDownBtn);
 	mainLayout->addLayout(btnRow);
 
-	// Type selector
-	auto *typeRow = new QHBoxLayout();
-	typeRow->addWidget(new QLabel("Type:", this));
-	m_typeCombo = new QComboBox(this);
-	m_typeCombo->addItem("Set Text", static_cast<int>(ActionType::SetText));
-	m_typeCombo->addItem("Enable/Disable Filter", static_cast<int>(ActionType::EnableFilter));
-	m_typeCombo->addItem("Switch Scene", static_cast<int>(ActionType::SwitchScene));
-	m_typeCombo->addItem("Delay", static_cast<int>(ActionType::Delay));
-	m_typeCombo->addItem("Trigger Global Hotkey", static_cast<int>(ActionType::TriggerGlobalHotkey));
-	m_typeCombo->addItem("Trigger Source Hotkey", static_cast<int>(ActionType::TriggerSourceHotkey));
-	typeRow->addWidget(m_typeCombo);
-	mainLayout->addLayout(typeRow);
+	// Header for the selected step's editor
+	m_stepLabel = new QLabel(this);
+	m_stepLabel->setStyleSheet("font-weight: bold;");
+	mainLayout->addWidget(m_stepLabel);
 
 	// Stacked edit forms
 	m_editStack = new QStackedWidget(this);
 	mainLayout->addWidget(m_editStack);
 
 	// Connections
-	connect(m_addBtn, &QPushButton::clicked, this, &ActionListWidget::OnAddAction);
 	connect(m_removeBtn, &QPushButton::clicked, this, &ActionListWidget::OnRemoveAction);
 	connect(m_moveUpBtn, &QPushButton::clicked, this, &ActionListWidget::OnMoveUp);
 	connect(m_moveDownBtn, &QPushButton::clicked, this, &ActionListWidget::OnMoveDown);
 	connect(m_listWidget, &QListWidget::currentRowChanged, this, &ActionListWidget::OnSelectionChanged);
-	connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-		&ActionListWidget::OnTypeChanged);
+
+	m_editStack->setEnabled(false);
 }
 
 void ActionListWidget::SetupEditForms()
@@ -227,6 +244,8 @@ void ActionListWidget::setActions(const QList<ActionStep> &actions)
 	UpdateListDisplay();
 	if (!m_actions.isEmpty()) {
 		m_listWidget->setCurrentRow(0);
+	} else {
+		OnSelectionChanged();
 	}
 }
 
@@ -235,13 +254,20 @@ QList<ActionStep> ActionListWidget::actions() const
 	return m_actions;
 }
 
-void ActionListWidget::OnAddAction()
+void ActionListWidget::OnAddAction(ActionType type)
 {
 	ActionStep step;
-	step.type = static_cast<ActionType>(m_typeCombo->currentData().toInt());
+	step.type = type;
 	m_actions.append(step);
 	UpdateListDisplay();
-	m_listWidget->setCurrentRow(m_actions.size() - 1);
+
+	const int row = m_actions.size() - 1;
+	m_listWidget->setCurrentRow(row);
+
+	// Loading the new step filled the editor's dropdowns with their first
+	// entries; store those so the step does what the editor shows.
+	SaveEditorIntoStep(row);
+	UpdateListDisplay();
 }
 
 void ActionListWidget::OnRemoveAction()
@@ -255,6 +281,8 @@ void ActionListWidget::OnRemoveAction()
 
 	if (!m_actions.isEmpty()) {
 		m_listWidget->setCurrentRow(qMin(row, m_actions.size() - 1));
+	} else {
+		OnSelectionChanged();
 	}
 }
 
@@ -283,21 +311,20 @@ void ActionListWidget::OnMoveDown()
 void ActionListWidget::OnSelectionChanged()
 {
 	int row = m_listWidget->currentRow();
-	if (row >= 0 && row < m_actions.size()) {
+	const bool valid = row >= 0 && row < m_actions.size();
+
+	m_editStack->setEnabled(valid);
+	m_removeBtn->setEnabled(valid);
+	m_moveUpBtn->setEnabled(valid && row > 0);
+	m_moveDownBtn->setEnabled(valid && row < m_actions.size() - 1);
+
+	if (valid) {
+		m_stepLabel->setText(QString("Step %1: %2").arg(row + 1).arg(ActionTypeName(m_actions[row].type)));
 		LoadStepIntoEditor(row);
+	} else {
+		m_stepLabel->setText(m_actions.isEmpty() ? "No steps yet. Use Add Step to create one."
+							 : "Select a step to edit it.");
 	}
-}
-
-void ActionListWidget::OnTypeChanged(int)
-{
-	int row = m_listWidget->currentRow();
-	if (row < 0 || row >= m_actions.size() || m_updatingEditor)
-		return;
-
-	ActionType newType = static_cast<ActionType>(m_typeCombo->currentData().toInt());
-	m_actions[row].type = newType;
-	m_editStack->setCurrentIndex(static_cast<int>(newType));
-	UpdateListDisplay();
 }
 
 void ActionListWidget::OnEditFieldChanged()
@@ -312,16 +339,28 @@ void ActionListWidget::OnEditFieldChanged()
 
 void ActionListWidget::UpdateListDisplay()
 {
+	auto label = [this](int i) {
+		return QString("%1. %2").arg(i + 1).arg(ActionStepToString(m_actions[i]));
+	};
+
+	// Same number of steps (an edit): relabel in place so the selection,
+	// and with it the editor the user is typing in, is left alone.
+	if (m_listWidget->count() == m_actions.size()) {
+		for (int i = 0; i < m_actions.size(); i++)
+			m_listWidget->item(i)->setText(label(i));
+		return;
+	}
+
 	int currentRow = m_listWidget->currentRow();
-	m_listWidget->clear();
-
-	for (int i = 0; i < m_actions.size(); i++) {
-		m_listWidget->addItem(QString("%1. %2").arg(i + 1).arg(ActionStepToString(m_actions[i])));
+	{
+		QSignalBlocker blocker(m_listWidget);
+		m_listWidget->clear();
+		for (int i = 0; i < m_actions.size(); i++)
+			m_listWidget->addItem(label(i));
 	}
 
-	if (currentRow >= 0 && currentRow < m_actions.size()) {
+	if (currentRow >= 0 && currentRow < m_actions.size())
 		m_listWidget->setCurrentRow(currentRow);
-	}
 }
 
 void ActionListWidget::LoadStepIntoEditor(int index)
@@ -329,11 +368,6 @@ void ActionListWidget::LoadStepIntoEditor(int index)
 	m_updatingEditor = true;
 
 	const ActionStep &step = m_actions[index];
-
-	// Set type combo
-	int typeIdx = m_typeCombo->findData(static_cast<int>(step.type));
-	if (typeIdx >= 0)
-		m_typeCombo->setCurrentIndex(typeIdx);
 
 	m_editStack->setCurrentIndex(static_cast<int>(step.type));
 
@@ -345,24 +379,18 @@ void ActionListWidget::LoadStepIntoEditor(int index)
 	case ActionType::EnableFilter:
 		PopulateSourceDropdowns();
 		if (!step.filterSourceName.isEmpty()) {
-			int idx = m_filterSourceCombo->findText(step.filterSourceName);
-			if (idx >= 0)
-				m_filterSourceCombo->setCurrentIndex(idx);
+			SelectOrKeep(m_filterSourceCombo, step.filterSourceName);
 			PopulateFilterDropdown(step.filterSourceName);
-			idx = m_filterNameCombo->findText(step.filterName);
-			if (idx >= 0)
-				m_filterNameCombo->setCurrentIndex(idx);
+			SelectOrKeep(m_filterNameCombo, step.filterName);
+		} else {
+			PopulateFilterDropdown(m_filterSourceCombo->currentText());
 		}
 		m_filterEnabledCheck->setChecked(step.filterEnabled);
 		break;
 
 	case ActionType::SwitchScene:
 		PopulateSceneDropdown();
-		if (!step.sceneName.isEmpty()) {
-			int idx = m_sceneCombo->findText(step.sceneName);
-			if (idx >= 0)
-				m_sceneCombo->setCurrentIndex(idx);
-		}
+		SelectOrKeep(m_sceneCombo, step.sceneName);
 		break;
 
 	case ActionType::Delay:
@@ -378,12 +406,12 @@ void ActionListWidget::LoadStepIntoEditor(int index)
 	case ActionType::TriggerSourceHotkey:
 		PopulateSourceDropdowns();
 		if (!step.sourceHotkeySourceName.isEmpty()) {
-			int idx = m_sourceHotkeySourceCombo->findText(step.sourceHotkeySourceName);
-			if (idx >= 0)
-				m_sourceHotkeySourceCombo->setCurrentIndex(idx);
+			SelectOrKeep(m_sourceHotkeySourceCombo, step.sourceHotkeySourceName);
 			PopulateSourceHotkeyDropdown(step.sourceHotkeySourceName);
 			if (!step.sourceHotkeyName.isEmpty())
 				SetHotkeyComboValue(m_sourceHotkeyNameCombo, step.sourceHotkeyName);
+		} else {
+			PopulateSourceHotkeyDropdown(m_sourceHotkeySourceCombo->currentText());
 		}
 		break;
 	}
@@ -558,6 +586,25 @@ void ActionListWidget::PopulateSourceHotkeyDropdown(const QString &sourceName)
 
 	obs_weak_source_release(weak);
 	obs_source_release(source);
+}
+
+QString ActionListWidget::ActionTypeName(ActionType type)
+{
+	switch (type) {
+	case ActionType::SetText:
+		return "Set Text";
+	case ActionType::EnableFilter:
+		return "Enable/Disable Filter";
+	case ActionType::SwitchScene:
+		return "Switch Scene";
+	case ActionType::Delay:
+		return "Delay";
+	case ActionType::TriggerGlobalHotkey:
+		return "Trigger Global Hotkey";
+	case ActionType::TriggerSourceHotkey:
+		return "Trigger Source Hotkey";
+	}
+	return "Unknown";
 }
 
 QString ActionListWidget::ActionStepToString(const ActionStep &step)

@@ -76,20 +76,20 @@ void TMinusDock::SetupUI()
 	m_startAllBtn->setToolTip("Start All Timers");
 	toolbar->addWidget(m_startAllBtn);
 
-	m_stopAllBtn = new QPushButton(this);
-	m_stopAllBtn->setFixedSize(24, 24);
-	m_stopAllBtn->setFlat(true);
-	m_stopAllBtn->setProperty("themeID", "stopIcon");
-	m_stopAllBtn->setProperty("class", "icon-media-stop");
-	m_stopAllBtn->setToolTip("Stop All Timers");
-	toolbar->addWidget(m_stopAllBtn);
+	m_pauseAllBtn = new QPushButton(this);
+	m_pauseAllBtn->setFixedSize(24, 24);
+	m_pauseAllBtn->setFlat(true);
+	m_pauseAllBtn->setProperty("themeID", "pauseIcon");
+	m_pauseAllBtn->setProperty("class", "icon-media-pause");
+	m_pauseAllBtn->setToolTip("Pause All Timers");
+	toolbar->addWidget(m_pauseAllBtn);
 
 	mainLayout->addLayout(toolbar);
 
 	// Connections
 	connect(m_addBtn, &QPushButton::clicked, this, [this]() { AddTimer(); });
 	connect(m_startAllBtn, &QPushButton::clicked, this, &TMinusDock::StartAllTimers);
-	connect(m_stopAllBtn, &QPushButton::clicked, this, &TMinusDock::StopAllTimers);
+	connect(m_pauseAllBtn, &QPushButton::clicked, this, &TMinusDock::PauseAllTimers);
 }
 
 void TMinusDock::AddTimer(obs_data_t *savedData)
@@ -158,7 +158,7 @@ void TMinusDock::StartAllTimers()
 	}
 }
 
-void TMinusDock::StopAllTimers()
+void TMinusDock::PauseAllTimers()
 {
 	for (auto *timer : m_timers) {
 		timer->PauseTimer();
@@ -244,7 +244,7 @@ void TMinusDock::SaveSettings()
 
 	// Global hotkeys apply across collections
 	SaveHotkey(root, m_startAllHotkeyId, "TMinus_StartAll");
-	SaveHotkey(root, m_stopAllHotkeyId, "TMinus_StopAll");
+	SaveHotkey(root, m_pauseAllHotkeyId, "TMinus_StopAll");
 
 	WriteConfigRoot(root);
 	obs_data_release(root);
@@ -454,17 +454,19 @@ void TMinusDock::RegisterGlobalHotkeys(obs_data_t *savedData)
 		m_startAllHotkeyId, "TMinus_StartAll", "T-Minus: Start All Timers", this,
 		[this]() { StartAllTimers(); }, "Start All Timers", savedData);
 
+	// Registered under its original "StopAll" name so existing key
+	// bindings keep working; it has always paused rather than stopped.
 	LoadHotkey(
-		m_stopAllHotkeyId, "TMinus_StopAll", "T-Minus: Stop All Timers", this, [this]() { StopAllTimers(); },
-		"Stop All Timers", savedData);
+		m_pauseAllHotkeyId, "TMinus_StopAll", "T-Minus: Pause All Timers", this, [this]() { PauseAllTimers(); },
+		"Pause All Timers", savedData);
 }
 
 void TMinusDock::UnregisterGlobalHotkeys()
 {
 	CleanupHotkey(m_startAllHotkeyId);
 	m_startAllHotkeyId = -1;
-	CleanupHotkey(m_stopAllHotkeyId);
-	m_stopAllHotkeyId = -1;
+	CleanupHotkey(m_pauseAllHotkeyId);
+	m_pauseAllHotkeyId = -1;
 }
 
 void TMinusDock::OBSFrontendEventHandler(enum obs_frontend_event event, void *data)

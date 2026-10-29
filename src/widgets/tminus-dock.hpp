@@ -25,7 +25,7 @@ public slots:
 	void RemoveTimer(const QString &id);
 	void MoveTimer(Direction dir, const QString &id);
 	void StartAllTimers();
-	void StopAllTimers();
+	void PauseAllTimers();
 
 private:
 	void SetupUI();
@@ -49,12 +49,12 @@ private:
 	QScrollArea *m_scrollArea;
 	QPushButton *m_addBtn;
 	QPushButton *m_startAllBtn;
-	QPushButton *m_stopAllBtn;
+	QPushButton *m_pauseAllBtn;
 
 	QList<TimerWidget *> m_timers;
 
 	int m_startAllHotkeyId = -1;
-	int m_stopAllHotkeyId = -1;
+	int m_pauseAllHotkeyId = -1;
 	bool m_exitSaveDone = false;
 	bool m_loading = false;
 	bool m_finishedLoading = false;

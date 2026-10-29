@@ -98,6 +98,10 @@ void TimerWidget::UpdateHeaderLabels()
 
 void TimerWidget::StartTimer()
 {
+	// A fresh run supersedes whatever the previous run's end actions are
+	// still doing (e.g. waiting on a Delay step before a scene switch).
+	if (m_engine->state() != TimerState::Running && m_engine->state() != TimerState::Paused)
+		m_actionExecutor->cancel();
 	m_engine->start();
 }
 
@@ -108,18 +112,15 @@ void TimerWidget::PauseTimer()
 
 void TimerWidget::ToggleStartPause()
 {
-	if (m_engine->state() == TimerState::Running) {
+	if (m_engine->state() == TimerState::Running)
 		m_engine->pause();
-	} else {
-		if (m_engine->state() == TimerState::Finished || m_engine->state() == TimerState::Stopped) {
-			m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
-		}
-		m_engine->start();
-	}
+	else
+		StartTimer();
 }
 
 void TimerWidget::RestartTimer()
 {
+	m_actionExecutor->cancel();
 	m_engine->restart();
 }
 
@@ -134,7 +135,12 @@ void TimerWidget::OnFinished()
 	obs_log(LOG_INFO, "Timer %s finished", m_data.timerId.toUtf8().constData());
 
 	if (!m_data.endActions.isEmpty()) {
-		m_actionExecutor->execute(m_data.endActions, m_data.selectedTextSource);
+		// %time% in Set Text steps is the bare time value, without the
+		// timer's own format string wrapped around it.
+		DisplayFormat timeOnly = m_data.display;
+		timeOnly.useFormatString = false;
+		m_actionExecutor->execute(m_data.endActions, m_data.selectedTextSource,
+					  FormatTimerDisplay(timeOnly, m_engine->currentTimeMs()));
 	}
 }
 

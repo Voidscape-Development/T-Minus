@@ -13,7 +13,8 @@ public:
 	explicit ActionExecutor(QObject *parent = nullptr);
 	~ActionExecutor();
 
-	void execute(const QList<ActionStep> &actions, const QString &textSourceName);
+	// timeText replaces %time% in Set Text steps
+	void execute(const QList<ActionStep> &actions, const QString &textSourceName, const QString &timeText);
 	void cancel();
 
 signals:
@@ -29,6 +30,7 @@ private:
 
 	QList<ActionStep> m_actions;
 	QString m_textSourceName;
+	QString m_timeText;
 	int m_currentStep = 0;
 	QTimer *m_delayTimer;
 };

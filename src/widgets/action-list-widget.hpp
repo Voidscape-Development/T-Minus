@@ -23,12 +23,11 @@ public:
 	QList<ActionStep> actions() const;
 
 private slots:
-	void OnAddAction();
+	void OnAddAction(ActionType type);
 	void OnRemoveAction();
 	void OnMoveUp();
 	void OnMoveDown();
 	void OnSelectionChanged();
-	void OnTypeChanged(int index);
 	void OnEditFieldChanged();
 
 private:
@@ -44,6 +43,7 @@ private:
 	void PopulateSourceHotkeyDropdown(const QString &sourceName);
 
 	static QString ActionStepToString(const ActionStep &step);
+	static QString ActionTypeName(ActionType type);
 
 	QList<ActionStep> m_actions;
 
@@ -54,7 +54,7 @@ private:
 	QPushButton *m_moveDownBtn;
 
 	// Editor
-	QComboBox *m_typeCombo;
+	QLabel *m_stepLabel;
 	QStackedWidget *m_editStack;
 
 	// SetText page
