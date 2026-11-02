@@ -1,6 +1,7 @@
 #include "action-list-widget.hpp"
 #include "drag-reorder.hpp"
 #include "button-style.hpp"
+#include "../utils/format-utils.hpp"
 
 #include <obs.h>
 #include <obs-frontend-api.h>
@@ -47,41 +48,52 @@ void AddHotkeyComboItem(QComboBox *combo, obs_hotkey_t *hotkey)
 	combo->addItem((desc && desc[0]) ? QString::fromUtf8(desc) : QString::fromUtf8(name), QString::fromUtf8(name));
 }
 
-void PopulateScenes(QComboBox *combo)
+QStringList SceneNames()
 {
-	combo->clear();
+	QStringList names;
 	struct obs_frontend_source_list sceneList = {};
 	obs_frontend_get_scenes(&sceneList);
 	for (size_t i = 0; i < sceneList.sources.num; i++) {
 		const char *name = obs_source_get_name(sceneList.sources.array[i]);
-		if (name)
-			combo->addItem(QString::fromUtf8(name));
+		if (name && name[0])
+			names.append(QString::fromUtf8(name));
 	}
 	obs_frontend_source_list_free(&sceneList);
+	return names;
+}
+
+// Lists are shown in natural order ("Scene 2" before "Scene 10") rather
+// than OBS's internal enumeration order, which looks random to the user
+
+void PopulateScenes(QComboBox *combo)
+{
+	combo->clear();
+	QStringList names = SceneNames();
+	NaturalSort(names);
+	combo->addItems(names);
 }
 
 // Every source plus the scenes (which can carry filters and hotkeys too)
 void PopulateSources(QComboBox *combo)
 {
 	combo->clear();
+	QStringList names;
 	obs_enum_sources(
 		[](void *data, obs_source_t *source) -> bool {
-			auto *combo = static_cast<QComboBox *>(data);
 			const char *name = obs_source_get_name(source);
 			if (name && name[0])
-				combo->addItem(QString::fromUtf8(name));
+				static_cast<QStringList *>(data)->append(QString::fromUtf8(name));
 			return true;
 		},
-		combo);
+		&names);
 
-	struct obs_frontend_source_list sceneList = {};
-	obs_frontend_get_scenes(&sceneList);
-	for (size_t i = 0; i < sceneList.sources.num; i++) {
-		const char *name = obs_source_get_name(sceneList.sources.array[i]);
-		if (name && combo->findText(QString::fromUtf8(name)) < 0)
-			combo->addItem(QString::fromUtf8(name));
+	for (const QString &scene : SceneNames()) {
+		if (!names.contains(scene))
+			names.append(scene);
 	}
-	obs_frontend_source_list_free(&sceneList);
+
+	NaturalSort(names);
+	combo->addItems(names);
 }
 
 void PopulateFilters(QComboBox *combo, const QString &sourceName)

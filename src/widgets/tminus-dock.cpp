@@ -9,11 +9,12 @@
 #include <obs-frontend-api.h>
 #include <util/platform.h>
 
-#include <QHBoxLayout>
 #include <QMenu>
+#include <QToolBar>
+#include <QToolButton>
 #include <QWidget>
 
-TMinusDock::TMinusDock(QWidget *parent) : OBSDock(parent)
+TMinusDock::TMinusDock(QWidget *parent) : QWidget(parent)
 {
 	qRegisterMetaType<obs_data_t *>("obs_data_t*");
 
@@ -80,52 +81,65 @@ void TMinusDock::SetupUI()
 		},
 		this);
 
-	// Bottom toolbar, mirroring the native OBS dock toolbars (Sources,
-	// Scenes, Audio Mixer). The theme's "icon-*" class rules render these
-	// as flat themed icon buttons; themeID covers legacy themes.
-	auto *toolbar = new QHBoxLayout();
-	toolbar->setContentsMargins(4, 4, 4, 4);
-	toolbar->setSpacing(4);
+	// Bottom toolbar, built the way the native OBS docks build theirs
+	// (Scenes, Sources): a QToolBar of tool buttons. The theme's
+	// "OBSDock QToolBar" rules then give it the same top rule, flat icon
+	// buttons, hover state, separators and tooltips as the docks around it.
+	// The theme's "icon-*" class rules supply the icons; themeID covers
+	// legacy themes.
+	auto *toolbar = new QToolBar(this);
+	toolbar->setObjectName("tminusToolbar");
+	toolbar->setMovable(false);
+	toolbar->setFloatable(false);
+	toolbar->setIconSize(QSize(16, 16));
+	toolbar->setContextMenuPolicy(Qt::PreventContextMenu);
 
-	auto toolbarButton = [this](const char *themeID, const char *cls, const QString &tip) {
-		auto *btn = new QPushButton(this);
-		btn->setFlat(true);
+	auto toolButton = [toolbar](const char *themeID, const char *cls, const QString &tip) {
+		auto *btn = new QToolButton(toolbar);
 		btn->setToolTip(tip);
 		btn->setAccessibleName(tip);
-		StyleIconButton(btn, ButtonSize::Toolbar, themeID, cls);
+		btn->setAutoRaise(true);
+		btn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+		if (themeID)
+			btn->setProperty("themeID", themeID);
+		if (cls)
+			btn->setProperty("class", cls);
+		toolbar->addWidget(btn);
 		return btn;
 	};
 
-	m_addBtn = toolbarButton("addIconSmall", "icon-plus", "Add Timer");
-	toolbar->addWidget(m_addBtn);
+	m_addBtn = toolButton("addIconSmall", "icon-plus", "Add Timer");
 
-	toolbar->addStretch();
+	auto *spacer = new QWidget(toolbar);
+	spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+	spacer->setAttribute(Qt::WA_TransparentForMouseEvents);
+	toolbar->addWidget(spacer);
 
-	m_runningLabel = new QLabel(this);
-	m_runningLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
-	toolbar->addWidget(m_runningLabel);
-	toolbar->addSpacing(4);
+	m_runningLabel = new QLabel(toolbar);
+	m_runningLabel->setObjectName("tminusRunningLabel");
+	m_runningLabel->setStyleSheet("QLabel#tminusRunningLabel { color: rgba(127, 127, 127, 100%); "
+				      "padding: 0px 6px; background: transparent; border: none; }");
+	m_runningLabelAction = toolbar->addWidget(m_runningLabel);
 
-	m_startAllBtn = toolbarButton("playIcon", "icon-media-play", "Start All Timers");
-	toolbar->addWidget(m_startAllBtn);
+	m_startAllBtn = toolButton("playIcon", "icon-media-play", "Start All Timers");
+	m_pauseAllBtn = toolButton("pauseIcon", "icon-media-pause", "Pause All Timers");
 
-	m_pauseAllBtn = toolbarButton("pauseIcon", "icon-media-pause", "Pause All Timers");
-	toolbar->addWidget(m_pauseAllBtn);
+	// Playback and view settings are separate groups, divided the way the
+	// native docks divide theirs (themed QToolBar::separator)
+	toolbar->addSeparator();
 
-	// A plain button like its neighbours (a QToolButton gets different
-	// theme padding and sizing), with a drawn icon since themes have none
-	m_compactBtn = toolbarButton(nullptr, nullptr, "Compact View");
+	// Themes have no list icon, so this one is drawn
+	m_compactBtn = toolButton(nullptr, nullptr, "Compact View");
 	m_compactBtn->setCheckable(true);
 	m_compactBtn->setIcon(ListIcon(palette().color(QPalette::ButtonText)));
-	toolbar->addWidget(m_compactBtn);
 
-	mainLayout->addLayout(toolbar);
+	mainLayout->addWidget(toolbar);
 
 	// Connections
-	connect(m_addBtn, &QPushButton::clicked, this, &TMinusDock::ShowAddMenu);
-	connect(m_startAllBtn, &QPushButton::clicked, this, &TMinusDock::StartAllTimers);
-	connect(m_pauseAllBtn, &QPushButton::clicked, this, &TMinusDock::PauseAllTimers);
-	connect(m_compactBtn, &QPushButton::toggled, this, [this](bool checked) {
+	connect(m_addBtn, &QToolButton::clicked, this, &TMinusDock::ShowAddMenu);
+	connect(m_startAllBtn, &QToolButton::clicked, this, &TMinusDock::StartAllTimers);
+	connect(m_pauseAllBtn, &QToolButton::clicked, this, &TMinusDock::PauseAllTimers);
+	connect(m_compactBtn, &QToolButton::toggled, this, [this](bool checked) {
 		SetCompact(checked);
 		SaveSettings();
 	});
@@ -299,6 +313,8 @@ void TMinusDock::UpdateRunningCount()
 			running++;
 	}
 	m_runningLabel->setText(running > 0 ? QString("%1 running").arg(running) : QString());
+	// An empty label would still take up its padding next to Start All
+	m_runningLabelAction->setVisible(running > 0);
 }
 
 void TMinusDock::SetCompact(bool compact)

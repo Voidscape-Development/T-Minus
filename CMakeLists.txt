@@ -47,7 +47,6 @@ target_sources(
     src/utils/obs-utils.cpp
     src/utils/format-utils.hpp
     src/utils/format-utils.cpp
-    src/widgets/obs-dock-wrapper.hpp
     src/widgets/tminus-dock.hpp
     src/widgets/tminus-dock.cpp
     src/widgets/timer-widget.hpp
@@ -59,6 +58,8 @@ target_sources(
     src/widgets/drag-reorder.hpp
     src/widgets/drag-reorder.cpp
     src/widgets/button-style.hpp
+    src/widgets/datetime-picker.hpp
+    src/widgets/datetime-picker.cpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

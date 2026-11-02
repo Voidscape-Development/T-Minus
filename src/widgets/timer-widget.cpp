@@ -194,16 +194,16 @@ void TimerWidget::SetupUI()
 	m_infoLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
 	full->addWidget(m_infoLabel);
 
-	auto *controls = new QHBoxLayout();
+	// Primary action, quick-time buttons and reset share one row and one
+	// height. The quick-time buttons go straight into this layout (between
+	// the primary button and reset) rather than into a nested container, so
+	// nothing between them and the row can change their size.
+	m_controlsRow = new QHBoxLayout();
+	auto *controls = m_controlsRow;
 	controls->setSpacing(4);
 	m_primaryBtn = new QPushButton(m_full);
 	StyleTextButton(m_primaryBtn, kControlRowHeight);
 	controls->addWidget(m_primaryBtn, 1);
-	m_nudgeBox = new QWidget(m_full);
-	auto *nudgeLayout = new QHBoxLayout(m_nudgeBox);
-	nudgeLayout->setContentsMargins(0, 0, 0, 0);
-	nudgeLayout->setSpacing(4);
-	controls->addWidget(m_nudgeBox);
 	m_restartBtn = new QPushButton(m_full);
 	m_restartBtn->setToolTip("Reset");
 	m_restartBtn->setAccessibleName("Reset");
@@ -266,17 +266,22 @@ void TimerWidget::SetupUI()
 
 void TimerWidget::RebuildNudgeButtons()
 {
-	qDeleteAll(m_nudgeButtons);
+	for (QPushButton *btn : m_nudgeButtons) {
+		m_controlsRow->removeWidget(btn);
+		btn->deleteLater();
+	}
 	m_nudgeButtons.clear();
 
+	// Inserted after the primary button, before reset
 	const auto entries = NudgeEntries();
 	for (int i = 0; i < entries.size() && i < 3; i++) {
 		const int deltaMs = entries[i].deltaSeconds * 1000;
-		auto *btn = new QPushButton(FormatDelta(entries[i].deltaSeconds), m_nudgeBox);
-		StyleTextButton(btn, kControlRowHeight);
+		auto *btn = new QPushButton(FormatDelta(entries[i].deltaSeconds), m_full);
+		StyleTextButton(btn, kControlRowHeight, 10);
 		btn->setToolTip(entries[i].label);
+		btn->setAccessibleName(entries[i].label);
 		connect(btn, &QPushButton::clicked, this, [this, deltaMs]() { m_engine->addTime(deltaMs); });
-		m_nudgeBox->layout()->addWidget(btn);
+		m_controlsRow->insertWidget(1 + i, btn);
 		m_nudgeButtons.append(btn);
 	}
 
@@ -316,16 +321,16 @@ void TimerWidget::UpdateMeta()
 {
 	if (m_data.selectedTextSource.isEmpty()) {
 		m_sourceLabel->setText("No text source");
-		m_sourceLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
+		m_sourceLabel->setStyleSheet("QLabel { color: rgba(127, 127, 127, 100%); }");
 		m_sourceLabel->setToolTip("Link a text source in the timer's settings to show the time on stream.");
 	} else if (m_sourceMissing) {
 		m_sourceLabel->setText(
 			QString::fromUtf8("⚠ Text source “%1” not found").arg(m_data.selectedTextSource));
-		m_sourceLabel->setStyleSheet(QString("color: %1;").arg(kPausedColor.name()));
+		m_sourceLabel->setStyleSheet(QString("QLabel { color: %1; }").arg(kPausedColor.name()));
 		m_sourceLabel->setToolTip("The source was renamed or removed. Pick it again in the timer's settings.");
 	} else {
 		m_sourceLabel->setText(QString("Text: %1").arg(m_data.selectedTextSource));
-		m_sourceLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
+		m_sourceLabel->setStyleSheet("QLabel { color: rgba(127, 127, 127, 100%); }");
 		m_sourceLabel->setToolTip(QString());
 	}
 	m_sourceLabel->update();
@@ -406,9 +411,11 @@ void TimerWidget::UpdateStateVisuals()
 					    "padding: 0px 5px; margin: 0px; font-size: 10px; font-weight: bold;")
 					    .arg(Rgba(color, 30), Rgba(color, 70)));
 
-	m_compactDot->setStyleSheet(state == TimerState::Stopped
-					    ? QString("border: 1px solid %1; border-radius: 4px;").arg(color.name())
-					    : QString("background-color: %1; border-radius: 4px;").arg(color.name()));
+	// Scoped to QLabel so the dot's tooltip doesn't pick up its border
+	m_compactDot->setStyleSheet(
+		state == TimerState::Stopped
+			? QString("QLabel { border: 1px solid %1; border-radius: 4px; }").arg(color.name())
+			: QString("QLabel { background-color: %1; border-radius: 4px; }").arg(color.name()));
 	m_compactDot->setToolTip(status);
 	m_compactName->setToolTip(QString("%1 (%2)").arg(DisplayLabel(), status));
 
@@ -454,7 +461,8 @@ void TimerWidget::UpdateStateVisuals()
 	// Once finished, the primary button is the reset; nudging a finished
 	// timer would be discarded by the next run anyway.
 	m_restartBtn->setVisible(state != TimerState::Finished);
-	m_nudgeBox->setVisible(state != TimerState::Finished);
+	for (QPushButton *btn : m_nudgeButtons)
+		btn->setVisible(state != TimerState::Finished);
 }
 
 void TimerWidget::SetCompact(bool compact)

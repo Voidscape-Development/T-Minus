@@ -1,6 +1,7 @@
 #include "timer-settings-dialog.hpp"
 #include "../core/action-executor.hpp"
 #include "../utils/format-utils.hpp"
+#include "datetime-picker.hpp"
 
 #include <obs.h>
 #include <obs-frontend-api.h>
@@ -14,7 +15,6 @@
 #include <QVBoxLayout>
 
 #include <cstring>
-#include <functional>
 
 namespace {
 
@@ -75,7 +75,7 @@ TimerSettingsDialog::TimerSettingsDialog(const TimerData &data, QWidget *parent)
 {
 	m_timerLabel = data.displayName.isEmpty() ? QString("Timer") : data.displayName;
 	setWindowTitle(QString::fromUtf8("Edit Timer — %1").arg(m_timerLabel));
-	setMinimumSize(720, 560);
+	setMinimumSize(720, 600);
 
 	SetupUI();
 	LoadFromData(data);
@@ -189,7 +189,7 @@ QWidget *TimerSettingsDialog::CreateTimerPage()
 	// Type, as a segmented control
 	layout->addWidget(SectionLabel("Type", page));
 	auto *typeRow = new QHBoxLayout();
-	typeRow->setSpacing(0);
+	typeRow->setSpacing(6);
 	m_typeGroup = new QButtonGroup(this);
 	m_typeGroup->setExclusive(true);
 	const QList<QPair<TimerType, QString>> types = {{TimerType::Countdown, "Countdown"},
@@ -242,50 +242,15 @@ QWidget *TimerSettingsDialog::CreateTimerPage()
 	countdownLayout->addLayout(presetRow);
 	layout->addWidget(m_countdownBox);
 
-	// Time Until: calendar, time of day, quick presets and a summary of
-	// how long the countdown will run
+	// Time Until: our own date and time picker (calendar, time steppers,
+	// presets and a live "in 2h 15m" summary)
 	m_timeUntilBox = new QWidget(page);
 	auto *timeUntilLayout = new QVBoxLayout(m_timeUntilBox);
 	timeUntilLayout->setContentsMargins(0, 0, 0, 0);
 	timeUntilLayout->setSpacing(6);
-	timeUntilLayout->addWidget(SectionLabel("Target date and time", m_timeUntilBox));
-
-	m_calendar = new QCalendarWidget(m_timeUntilBox);
-	m_calendar->setGridVisible(false);
-	m_calendar->setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);
-	m_calendar->setMinimumDate(QDate::currentDate());
-	m_calendar->setMaximumHeight(220);
-	timeUntilLayout->addWidget(m_calendar);
-
-	auto *timeRow = new QHBoxLayout();
-	timeRow->addWidget(new QLabel("Time of day", m_timeUntilBox));
-	m_targetTimeEdit = new QTimeEdit(m_timeUntilBox);
-	const bool ampm = QLocale().timeFormat(QLocale::ShortFormat).contains(QLatin1Char('A'), Qt::CaseInsensitive);
-	m_targetTimeEdit->setDisplayFormat(ampm ? "h:mm:ss AP" : "HH:mm:ss");
-	timeRow->addWidget(m_targetTimeEdit, 1);
-	timeUntilLayout->addLayout(timeRow);
-
-	auto *targetPresetRow = new QHBoxLayout();
-	targetPresetRow->setSpacing(4);
-	auto addTargetPreset = [this, targetPresetRow](const QString &text, std::function<QDateTime()> calc) {
-		auto *btn = new QPushButton(text, m_timeUntilBox);
-		btn->setAutoDefault(false);
-		connect(btn, &QPushButton::clicked, this, [this, calc]() { SetTargetDateTime(calc()); });
-		targetPresetRow->addWidget(btn);
-	};
-	addTargetPreset("+15 min", []() { return QDateTime::currentDateTime().addSecs(15 * 60); });
-	addTargetPreset("+1 hour", []() { return QDateTime::currentDateTime().addSecs(3600); });
-	addTargetPreset("Next hour", []() {
-		QDateTime now = QDateTime::currentDateTime();
-		return QDateTime(now.date(), QTime(now.time().hour(), 0)).addSecs(3600);
-	});
-	addTargetPreset("Midnight", []() { return QDateTime(QDate::currentDate().addDays(1), QTime(0, 0)); });
-	targetPresetRow->addStretch();
-	timeUntilLayout->addLayout(targetPresetRow);
-
-	m_targetSummaryLabel = new QLabel(m_timeUntilBox);
-	m_targetSummaryLabel->setWordWrap(true);
-	timeUntilLayout->addWidget(m_targetSummaryLabel);
+	timeUntilLayout->addWidget(SectionLabel("Counts down to", m_timeUntilBox));
+	m_targetPicker = new DateTimePicker(m_timeUntilBox);
+	timeUntilLayout->addWidget(m_targetPicker);
 	layout->addWidget(m_timeUntilBox);
 	layout->addSpacing(10);
 
@@ -303,8 +268,7 @@ QWidget *TimerSettingsDialog::CreateTimerPage()
 	connect(m_typeGroup, &QButtonGroup::idClicked, this, &TimerSettingsDialog::UpdateTypeVisibility);
 	for (QSpinBox *spin : {m_daysSpin, m_hoursSpin, m_minutesSpin, m_secondsSpin})
 		connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &TimerSettingsDialog::UpdatePreview);
-	connect(m_calendar, &QCalendarWidget::selectionChanged, this, &TimerSettingsDialog::UpdateTargetSummary);
-	connect(m_targetTimeEdit, &QTimeEdit::timeChanged, this, &TimerSettingsDialog::UpdateTargetSummary);
+	connect(m_targetPicker, &DateTimePicker::dateTimeChanged, this, &TimerSettingsDialog::UpdatePreview);
 
 	return Scrollable(page);
 }
@@ -577,17 +541,23 @@ void TimerSettingsDialog::PopulateTextSourceDropdown(const QString &selected)
 	// be named "(None)" still works
 	m_textSourceCombo->addItem("(None)", QString());
 
+	QStringList names;
 	obs_enum_sources(
 		[](void *data, obs_source_t *source) -> bool {
-			auto *combo = static_cast<QComboBox *>(data);
 			if (IsTextSource(obs_source_get_unversioned_id(source))) {
 				const char *name = obs_source_get_name(source);
 				if (name && name[0])
-					combo->addItem(QString::fromUtf8(name), QString::fromUtf8(name));
+					static_cast<QStringList *>(data)->append(QString::fromUtf8(name));
 			}
 			return true;
 		},
-		m_textSourceCombo);
+		&names);
+
+	// Natural order ("Text 2" before "Text 10") instead of OBS's internal
+	// enumeration order
+	NaturalSort(names);
+	for (const QString &name : names)
+		m_textSourceCombo->addItem(name, name);
 
 	if (selected.isEmpty())
 		return;
@@ -654,14 +624,13 @@ DisplayFormat TimerSettingsDialog::SelectedFormat() const
 
 QDateTime TimerSettingsDialog::SelectedTargetDateTime() const
 {
-	return QDateTime(m_calendar->selectedDate(), m_targetTimeEdit->time());
+	return m_targetPicker->dateTime();
 }
 
 void TimerSettingsDialog::SetTargetDateTime(const QDateTime &dt)
 {
-	m_calendar->setSelectedDate(dt.date());
-	m_targetTimeEdit->setTime(dt.time());
-	UpdateTargetSummary();
+	m_targetPicker->setDateTime(dt);
+	UpdatePreview();
 }
 
 void TimerSettingsDialog::SetDuration(int hours, int minutes, int seconds)
@@ -683,35 +652,6 @@ void TimerSettingsDialog::UpdateTypeVisibility()
 void TimerSettingsDialog::UpdateUnitsVisibility()
 {
 	m_customUnitsBox->setVisible(m_unitsCombo->currentData().toInt() == UnitsCustom);
-	UpdatePreview();
-}
-
-void TimerSettingsDialog::UpdateTargetSummary()
-{
-	const QDateTime target = SelectedTargetDateTime();
-	const qint64 secs = QDateTime::currentDateTime().secsTo(target);
-
-	if (secs <= 0) {
-		m_targetSummaryLabel->setStyleSheet("color: #d9534f;");
-		m_targetSummaryLabel->setText("The selected time is in the past — the timer will read zero.");
-	} else {
-		const qint64 days = secs / 86400;
-		const qint64 hours = (secs % 86400) / 3600;
-		const qint64 minutes = (secs % 3600) / 60;
-
-		QStringList parts;
-		if (days > 0)
-			parts << QString("%1d").arg(days);
-		if (hours > 0 || days > 0)
-			parts << QString("%1h").arg(hours);
-		parts << QString("%1m").arg(minutes);
-
-		m_targetSummaryLabel->setStyleSheet(kMutedStyle);
-		m_targetSummaryLabel->setText(QString("Counts down for %1 (until %2)")
-						      .arg(parts.join(" "))
-						      .arg(QLocale().toString(target, QLocale::ShortFormat)));
-	}
-
 	UpdatePreview();
 }
 

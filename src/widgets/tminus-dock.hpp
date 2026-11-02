@@ -1,6 +1,5 @@
 #pragma once
 
-#include "obs-dock-wrapper.hpp"
 #include "timer-widget.hpp"
 
 #include <obs-frontend-api.h>
@@ -8,7 +7,9 @@
 #include <QMetaType>
 #include <QVBoxLayout>
 #include <QScrollArea>
-#include <QPushButton>
+#include <QAction>
+#include <QToolButton>
+#include <QWidget>
 #include <QStackedWidget>
 #include <QLabel>
 #include <QList>
@@ -17,7 +18,12 @@ Q_DECLARE_OPAQUE_POINTER(obs_data_t *)
 
 class DragReorderController;
 
-class TMinusDock : public OBSDock {
+// OBS wraps this widget in its own dock (an OBSDock), so the theme's
+// "OBSDock > QWidget" panel rule styles this widget like a native dock's
+// contents. It deliberately doesn't use a class named OBSDock itself: the
+// same rule would then also hit every direct child (toolbar buttons and
+// labels), giving each one a panel border.
+class TMinusDock : public QWidget {
 	Q_OBJECT
 
 public:
@@ -62,11 +68,12 @@ private:
 	QLabel *m_emptyTitle;
 	QVBoxLayout *m_timerListLayout;
 	QScrollArea *m_scrollArea;
-	QPushButton *m_addBtn;
+	QToolButton *m_addBtn;
 	QLabel *m_runningLabel;
-	QPushButton *m_startAllBtn;
-	QPushButton *m_pauseAllBtn;
-	QPushButton *m_compactBtn;
+	QAction *m_runningLabelAction;
+	QToolButton *m_startAllBtn;
+	QToolButton *m_pauseAllBtn;
+	QToolButton *m_compactBtn;
 
 	QList<TimerWidget *> m_timers;
 	DragReorderController *m_reorder;

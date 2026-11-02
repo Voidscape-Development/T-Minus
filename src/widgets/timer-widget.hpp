@@ -9,6 +9,8 @@
 #include <QPushButton>
 #include <QWidget>
 
+class QHBoxLayout;
+
 #include "../core/timer-data.hpp"
 #include "../core/timer-engine.hpp"
 
@@ -116,7 +118,7 @@ private:
 	QLabel *m_sourceLabel;
 	QLabel *m_infoLabel;
 	QPushButton *m_primaryBtn;
-	QWidget *m_nudgeBox;
+	QHBoxLayout *m_controlsRow;
 	QList<QPushButton *> m_nudgeButtons;
 	QPushButton *m_restartBtn;
 
