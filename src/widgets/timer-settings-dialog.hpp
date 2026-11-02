@@ -2,10 +2,8 @@
 
 #include <QDialog>
 #include <QButtonGroup>
-#include <QCalendarWidget>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDateTimeEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -18,6 +16,7 @@
 #include "action-list-widget.hpp"
 
 class ActionExecutor;
+class DateTimePicker;
 
 class TimerSettingsDialog : public QDialog {
 	Q_OBJECT
@@ -52,7 +51,6 @@ private:
 private slots:
 	void UpdateTypeVisibility();
 	void UpdateUnitsVisibility();
-	void UpdateTargetSummary();
 	void UpdatePreview();
 	void UpdateNavCounts();
 
@@ -74,9 +72,7 @@ private:
 	QSpinBox *m_minutesSpin;
 	QSpinBox *m_secondsSpin;
 	QWidget *m_timeUntilBox;
-	QCalendarWidget *m_calendar;
-	QTimeEdit *m_targetTimeEdit;
-	QLabel *m_targetSummaryLabel;
+	DateTimePicker *m_targetPicker;
 	QComboBox *m_streamStartCombo;
 
 	// Output page

@@ -1,5 +1,7 @@
 #include "format-utils.hpp"
 
+#include <algorithm>
+
 long long DurationToMs(const DurationValue &d)
 {
 	long long ms = 0;
@@ -91,4 +93,81 @@ QString FormatTimerDisplay(const DisplayFormat &fmt, long long timeMs)
 	}
 
 	return timeStr;
+}
+
+namespace {
+
+// Compares a and b chunk by chunk: runs of digits by numeric value, other
+// text case-insensitively and locale-aware. Done by hand because
+// QCollator's numeric mode isn't supported by every Qt collation backend.
+int NaturalCompare(const QString &a, const QString &b)
+{
+	int i = 0, j = 0;
+	while (i < a.size() && j < b.size()) {
+		const bool aDigit = a[i].isDigit();
+		const bool bDigit = b[j].isDigit();
+
+		if (aDigit && bDigit) {
+			int iEnd = i, jEnd = j;
+			while (iEnd < a.size() && a[iEnd].isDigit())
+				iEnd++;
+			while (jEnd < b.size() && b[jEnd].isDigit())
+				jEnd++;
+
+			// Compare by value: skip leading zeros, then the longer
+			// number is larger, then digit by digit
+			int iStart = i, jStart = j;
+			while (iStart < iEnd - 1 && a[iStart] == QLatin1Char('0'))
+				iStart++;
+			while (jStart < jEnd - 1 && b[jStart] == QLatin1Char('0'))
+				jStart++;
+			const int aLen = iEnd - iStart, bLen = jEnd - jStart;
+			if (aLen != bLen)
+				return aLen < bLen ? -1 : 1;
+			for (int k = 0; k < aLen; k++) {
+				const int da = a[iStart + k].digitValue(), db = b[jStart + k].digitValue();
+				if (da != db)
+					return da < db ? -1 : 1;
+			}
+			// Equal values: fewer leading zeros first ("1" before "01")
+			if (iEnd - i != jEnd - j)
+				return (iEnd - i) < (jEnd - j) ? -1 : 1;
+			i = iEnd;
+			j = jEnd;
+			continue;
+		}
+
+		if (aDigit != bDigit) {
+			// Numbers sort before text at the same position
+			return aDigit ? -1 : 1;
+		}
+
+		int iEnd = i, jEnd = j;
+		while (iEnd < a.size() && !a[iEnd].isDigit())
+			iEnd++;
+		while (jEnd < b.size() && !b[jEnd].isDigit())
+			jEnd++;
+		const QString aText = a.mid(i, iEnd - i).toCaseFolded();
+		const QString bText = b.mid(j, jEnd - j).toCaseFolded();
+		const int order = QString::localeAwareCompare(aText, bText);
+		if (order != 0)
+			return order;
+		i = iEnd;
+		j = jEnd;
+	}
+
+	if (i < a.size() || j < b.size())
+		return i < a.size() ? 1 : -1;
+	return 0;
+}
+
+} // namespace
+
+void NaturalSort(QStringList &names)
+{
+	std::stable_sort(names.begin(), names.end(), [](const QString &a, const QString &b) {
+		const int order = NaturalCompare(a, b);
+		// Names differing only in case still get a predictable order
+		return order != 0 ? order < 0 : a < b;
+	});
 }
