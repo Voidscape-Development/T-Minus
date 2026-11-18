@@ -23,11 +23,8 @@ function(set_target_properties_plugin target)
     PROPERTIES VERSION ${PLUGIN_VERSION} SOVERSION ${PLUGIN_VERSION_MAJOR} PREFIX ""
   )
 
-  install(
-    TARGETS ${target}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins
-  )
+  # OBS 33+ module layout
+  install(TARGETS ${target} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-modules/plugins)
 
   if(TARGET plugin-support)
     target_link_libraries(${target} PRIVATE plugin-support)
@@ -70,7 +67,7 @@ function(target_install_resources target)
 
     install(
       DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/"
-      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/${target}
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-modules/plugins/${target}
       USE_SOURCE_PERMISSIONS
     )
 
@@ -84,6 +81,10 @@ function(target_install_resources target)
       COMMENT "Copy ${target} resources to rundir"
       VERBATIM
     )
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json")
+      target_add_resource(${target} "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json")
+    endif()
   endif()
 endfunction()
 
@@ -91,7 +92,7 @@ endfunction()
 function(target_add_resource target resource)
   message(DEBUG "Add resource '${resource}' to target ${target} at destination '${target_destination}'...")
 
-  install(FILES "${resource}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/${target})
+  install(FILES "${resource}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-modules/plugins/${target})
 
   add_custom_command(
     TARGET ${target}

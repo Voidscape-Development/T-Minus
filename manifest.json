@@ -1,0 +1,16 @@
+{
+    "display_name": "T-Minus",
+    "id": "ae988d05-1671-481d-b67e-585722214d5a",
+    "version": "1.0.0",
+    "authors": ["Eion"],
+    "name": "t-minus",
+    "description": "Timer management plugin with countdown, stopwatch, and time-until timers.",
+    "long_description": "T-Minus adds a dock to OBS Studio for managing countdown, stopwatch and time-until timers, with configurable actions that run when a timer ends.",
+    "urls": {
+        "repository": "https://github.com/Voidscape-Development/T-Minus",
+        "website": "https://github.com/Voidscape-Development/T-Minus",
+        "support": "https://github.com/Voidscape-Development/T-Minus/issues"
+    },
+    "has_banner": false,
+    "has_icon": false
+}

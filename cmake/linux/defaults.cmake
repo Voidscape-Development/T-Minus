@@ -44,6 +44,9 @@ set(CPACK_VERBATIM_VARIABLES YES)
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-source")
 set(CPACK_ARCHIVE_THREADS 0)
 
+# Plugin targets the OBS 33+ module layout only; refuse to install on older OBS
+set(CPACK_DEBIAN_PACKAGE_BREAKS "obs-studio (<< 33~)")
+
 include(CPack)
 
 find_package(libobs QUIET)
