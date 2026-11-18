@@ -32,6 +32,21 @@ if(ENABLE_QT)
     ${CMAKE_PROJECT_NAME}
     PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
   )
+
+  # Xcode 26 runs the AUTOMOC predefines probe (clang++ -dM -E) with several platforms'
+  # *_DEPLOYMENT_TARGET variables set, which clang rejects as conflicting deployment targets.
+  if(XCODE)
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
+  endif()
+
+  # The AGL framework was removed in the macOS 26 SDK, but Qt's FindWrapOpenGL still links it.
+  if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    get_target_property(_wrap_opengl_libs WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+    if(_wrap_opengl_libs)
+      list(FILTER _wrap_opengl_libs EXCLUDE REGEX "(^|/|-framework )AGL(\\.framework)?$")
+      set_target_properties(WrapOpenGL::WrapOpenGL PROPERTIES INTERFACE_LINK_LIBRARIES "${_wrap_opengl_libs}")
+    endif()
+  endif()
 endif()
 
 target_sources(

@@ -9,7 +9,7 @@
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
-OBS_MODULE_AUTHOR("Eion")
+OBS_MODULE_AUTHOR("Voidscape Development")
 
 static TMinusDock *tminusDock = nullptr;
 
