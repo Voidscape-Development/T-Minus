@@ -1,59 +1,116 @@
-# OBS Plugin Template
+# T-Minus
 
-## Introduction
+T-Minus is an OBS Studio plugin for running countdowns, stopwatches and "time until" timers from a dock, showing them on stream through text sources, and running actions in OBS when they finish.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+## Features
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+### Timer types
 
-## Supported Build Environments
+| Type | What it does | Typical use |
+|------|--------------|-------------|
+| **Countdown** | Counts down a fixed length (days, hours, minutes, seconds), with quick presets from 1 minute to 1 hour. | "Starting soon", BRB screens |
+| **Stopwatch** | Counts up from zero. | Stream uptime, segment timing |
+| **Time Until** | Counts down to a chosen date and time, set with a built-in date and time picker. | Event start times |
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+Countdowns and stopwatches are measured on a monotonic clock, so changes to the system clock don't make them jump. Time Until timers follow the wall clock.
 
-## Quick Start
+### The T-Minus dock
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+- Add as many timers as you need, and reorder them by dragging.
+- Each timer has Start, Pause, Resume and Reset controls, plus up to three quick add-time buttons.
+- Each timer's menu can edit, duplicate, move or delete it.
+- The toolbar has **Start All** and **Pause All** buttons and shows how many timers are running.
+- **Compact View** shrinks each timer to a single row.
+- Timers belong to the current **scene collection**. Switching collections loads that collection's timers. Renaming a collection keeps its timers, and deleting one removes them.
 
-## Documentation
+### Showing a timer on stream
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+- Link each timer to a **text source** (Text (GDI+) on Windows, Text (FreeType 2) on macOS and Linux) and T-Minus keeps the source up to date.
+- Wrap the time in your own text with `%time%`, for example `Starting in %time%`.
+- Pick a time format:
+  - Auto, which hides hours and days while they're zero
+  - `H:MM:SS`, `MM:SS` or `D:HH:MM:SS`
+  - Seconds only
+  - Custom, where you choose which units to show
+- Hidden larger units carry into the first unit shown, so 1 hour 5 minutes in `MM:SS` reads `65:00`.
+- Optionally pad the first unit (`05:00` rather than `5:00`).
+- Optionally replace the time with your own text once the timer ends, such as "We're live!".
 
-Suggested reading to get up and running:
+### When the timer reaches zero
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+Countdown and Time Until timers can run a sequence of steps when they finish:
 
-## GitHub Actions & CI
+- **Set Text**: write text to the timer's text source (supports `%time%`).
+- **Enable/Disable Filter**: turn a filter on a source on or off.
+- **Switch Scene**: change the program scene.
+- **Wait**: pause the sequence for a set time.
+- **Press OBS Hotkey**: trigger any OBS hotkey.
+- **Press Source Hotkey**: trigger a hotkey that belongs to a source.
 
-Default GitHub Actions workflows are available for the following repository actions:
+Steps run top to bottom. **Test Run** lets you try the sequence right away, and resetting or restarting the timer cancels a sequence that is still running.
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+### When streaming starts
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
+Each timer can do one of the following when you start streaming:
 
-### Retrieving build artifacts
+- Do nothing
+- Start (or resume)
+- Restart from the beginning
+- Reset and wait
 
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
+### Hotkeys
 
-### Building a Release
+You bind all T-Minus hotkeys in **OBS Settings › Hotkeys**:
 
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
+- **T-Minus: Start All Timers** and **T-Minus: Pause All Timers**
+- Per timer: **Start/Pause** and **Restart**, listed as `T-Minus: … (timer name)`
+- Per timer: **add-time amounts**. Each amount you define (positive to add time, negative to subtract) gets its own hotkey, and the first three also appear as buttons on the timer in the dock.
 
-## Signing and Notarizing on macOS
+## Requirements
 
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+- **OBS Studio 33 or later.** T-Minus uses the OBS 33 plugin module layout and does not support earlier versions.
+- Windows 10/11 (x64), macOS 12 or later (Apple silicon and Intel), or Ubuntu 24.04 (x86_64).
+
+## Installation
+
+Download the package for your platform from the [Releases](https://github.com/Voidscape-Development/T-Minus/releases) page:
+
+| Platform | Package |
+|----------|---------|
+| Windows | `t-minus-<version>-windows-x64.zip` |
+| macOS | `t-minus-<version>-macos-universal.pkg` |
+| Ubuntu | `t-minus-<version>-x86_64-linux-gnu.deb`, installed with `sudo apt install ./t-minus-<version>-x86_64-linux-gnu.deb` |
+
+Once it's installed, restart OBS and open the dock from **Docks › T-Minus**.
+
+A rolling **nightly** pre-release is rebuilt from every commit to `master`. It is untested; use a tagged release for production.
+
+## Building from source
+
+T-Minus is built on the [OBS plugin template](https://github.com/obsproject/obs-plugintemplate) and uses its CMake presets and build scripts.
+
+| Platform | Tools |
+|----------|-------|
+| Windows | Visual Studio 17 2022, CMake 3.30.5+ |
+| macOS | Xcode 26, CMake 3.30.5+ |
+| Ubuntu 24.04 | CMake 3.28.3+, `ninja-build`, `pkg-config`, `build-essential` |
+
+Configure and build with the preset for your platform (`windows-x64`, `macos` or `ubuntu-x86_64`):
+
+```sh
+cmake --preset <preset>
+cmake --build --preset <preset>
+```
+
+The OBS sources, prebuilt dependencies and Qt 6 that the build needs are listed in `buildspec.json` and downloaded during configuration on Windows and macOS. See the template's [build system documentation](https://github.com/obsproject/obs-plugintemplate/wiki) for details.
+
+### Continuous integration
+
+GitHub Actions builds every push and pull request on Windows, macOS and Ubuntu, and checks formatting with `clang-format` and `gersemi`.
+
+- Pushing a semantic-version tag (e.g. `1.2.0`) creates a draft release with packages attached.
+- Every push to `master` updates the nightly pre-release.
+
+## License
+
+T-Minus is licensed under the [GNU General Public License v2.0](LICENSE).
