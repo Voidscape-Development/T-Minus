@@ -45,11 +45,13 @@ Countdown and Time Until timers can optionally run into **overtime**: instead of
 
 ### The T-Minus Timer source
 
-Add a **T-Minus Timer** source to a scene instead of linking a text source. It shows the timer's text (with its format string and finished text) and has its own options:
+Add a **T-Minus Timer** source to a scene instead of linking a text source. It shows the timer's text (with its format string and finished text) and draws it through its own shader, so it looks the same on every platform:
 
-- Font, color and outline
-- A warning color and a final color that take over as a countdown nears zero (for example from 60 and 10 seconds left)
-- A progress bar under countdowns, with its own height, color and background
+- **Text**: font, outline, alignment, and a minimum width so the source doesn't resize as the digits change.
+- **Fill**: solid, or a two- or three-color gradient, linear (at any angle) or radial, optionally animated.
+- **Warning** and **Final seconds**: their own colors or gradients from a number of seconds left, with an optional smooth fade between states and a pulse in the final seconds.
+- **Progress** (countdowns): a bar below, above or behind the text, or a ring around it, with rounded ends, a track color, and its own gradient or the text's colors.
+- **Background**: a panel behind everything, with its own color or gradient, padding and corner radius.
 
 ### Actions
 

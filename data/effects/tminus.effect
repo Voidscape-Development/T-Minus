@@ -1,0 +1,86 @@
+// Draws one part of a T-Minus Timer source, filled with a gradient: the
+// captured text (its alpha is the shape, its color tints the fill so outlines
+// stay dark), a rounded rectangle (bar, panel) or a ring.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float2 size;     // in pixels
+uniform float2 uv_scale; // gradient stretch, so a partly filled bar keeps its colors
+uniform float mode;      // 0 text, 1 rounded rectangle, 2 ring
+uniform float radius;    // rectangle corner radius
+uniform float thickness; // ring thickness
+uniform float progress;  // ring arc, 0 to 1 clockwise from the top
+
+uniform float4 color0;
+uniform float4 color1;
+uniform float4 color2;
+uniform float radial;
+uniform float2 direction;
+uniform float shift;
+uniform float opacity;
+
+sampler_state def_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+float4 Gradient(float2 uv)
+{
+	float2 p = uv * uv_scale - 0.5;
+	float t = radial > 0.5 ? length(p) * 2.0
+			       : dot(p, direction) / (abs(direction.x) + abs(direction.y)) + 0.5;
+	// Mirrored repeat, so an animated shift scrolls without a seam
+	t = 1.0 - abs(1.0 - 2.0 * frac((t + shift) * 0.5));
+	return t < 0.5 ? lerp(color0, color1, t * 2.0) : lerp(color1, color2, t * 2.0 - 1.0);
+}
+
+float4 PSDraw(VertData v_in) : TARGET
+{
+	float2 p = (v_in.uv - 0.5) * size;
+	float3 tint = float3(1.0, 1.0, 1.0);
+	float alpha;
+
+	if (mode < 0.5) {
+		float4 tex = image.Sample(def_sampler, v_in.uv);
+		// Text sources may draw premultiplied (color never above alpha);
+		// undo that so edges don't darken
+		bool premultiplied = max(max(tex.r, tex.g), tex.b) <= tex.a + 0.002 && tex.a > 0.0;
+		tint = premultiplied ? tex.rgb / tex.a : tex.rgb;
+		alpha = tex.a;
+	} else if (mode < 1.5) {
+		float2 q = abs(p) - (size * 0.5 - radius);
+		alpha = saturate(0.5 - (length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius));
+	} else {
+		float r = min(size.x, size.y) * 0.5 - thickness * 0.5;
+		alpha = saturate(0.5 - (abs(length(p) - r) - thickness * 0.5));
+		if (frac(atan2(p.x, -p.y) / 6.2831853 + 1.0) > progress)
+			alpha = 0.0;
+	}
+
+	float4 c = Gradient(v_in.uv);
+	return float4(c.rgb * tint, c.a * alpha * opacity);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDraw(v_in);
+	}
+}
