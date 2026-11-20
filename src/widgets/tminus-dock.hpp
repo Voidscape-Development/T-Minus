@@ -30,6 +30,11 @@ public:
 	explicit TMinusDock(QWidget *parent = nullptr);
 	~TMinusDock();
 
+	static TMinusDock *instance() { return s_instance; }
+	const QList<TimerWidget *> &timers() const { return m_timers; }
+	// By timer ID, or else by display name
+	TimerWidget *FindTimer(const QString &idOrName) const;
+
 public slots:
 	TimerWidget *AddTimer(obs_data_t *savedData = nullptr, int index = -1);
 	void AddTimerOfType(TimerType type);
@@ -86,5 +91,6 @@ private:
 	bool m_compact = false;
 	QString m_currentCollection;
 
+	static inline TMinusDock *s_instance = nullptr;
 	static constexpr const char *CONFIG_FILE = "config.json";
 };

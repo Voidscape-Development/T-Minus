@@ -5,6 +5,8 @@
 #include <QMainWindow>
 
 #include "plugin-support.h"
+#include "core/tminus-source.hpp"
+#include "core/websocket-api.hpp"
 #include "widgets/tminus-dock.hpp"
 
 OBS_DECLARE_MODULE()
@@ -15,6 +17,8 @@ static TMinusDock *tminusDock = nullptr;
 
 bool obs_module_load(void)
 {
+	RegisterTMinusSource();
+
 	const auto main_window = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 
 	obs_frontend_push_ui_translation(obs_module_get_string);
@@ -25,6 +29,11 @@ bool obs_module_load(void)
 
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
 	return true;
+}
+
+void obs_module_post_load(void)
+{
+	RegisterWebsocketVendor();
 }
 
 void obs_module_unload(void)

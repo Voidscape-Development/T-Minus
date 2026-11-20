@@ -3,6 +3,7 @@
 #include <obs.h>
 
 #include <QFrame>
+#include <QHash>
 #include <QLabel>
 #include <QList>
 #include <QProgressBar>
@@ -49,7 +50,13 @@ public:
 	void PauseTimer();
 	void ToggleStartPause();
 	void RestartTimer();
+	void AddTime(long long deltaMs) { m_engine->addTime(static_cast<int>(deltaMs)); }
+	void SetTime(long long ms) { m_engine->setTimeMs(ms); }
 	void OpenSettings();
+
+	QString DisplayLabel() const;
+	// The timer's ID, name, type, state and time as reported to obs-websocket
+	obs_data_t *Describe() const;
 
 	void SetCompact(bool compact);
 	void SetMoveEnabled(bool canMoveUp, bool canMoveDown);
@@ -87,7 +94,11 @@ private:
 	void UpdateMeta();
 	void UpdateSubLabel();
 	void ConfirmDelete();
-	QString DisplayLabel() const;
+	void ApplyEngineConfig();
+	void RunTimedActions(long long previousMs, long long currentMs);
+	void EmitEvent(const char *type) const;
+	// Values for %time%, %name%, %target% and %percent%
+	QHash<QString, QString> Placeholders(long long timeMs) const;
 
 	// Nudge amounts shown on the card: the timer's add-time hotkey
 	// entries, or a default pair when it has none.
@@ -96,6 +107,9 @@ private:
 	TimerData m_data;
 	TimerEngine *m_engine;
 	ActionExecutor *m_actionExecutor;
+	QList<ActionExecutor *> m_timedExecutors;
+	long long m_lastTickMs = 0;
+	bool m_inOvertime = false;
 
 	bool m_compact = false;
 	bool m_sourceMissing = false;

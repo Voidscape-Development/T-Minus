@@ -3,6 +3,8 @@
 #include "drag-reorder.hpp"
 #include "button-style.hpp"
 #include "../core/action-executor.hpp"
+#include "../core/tminus-source.hpp"
+#include "../core/websocket-api.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../utils/format-utils.hpp"
 #include "../plugin-support.h"
@@ -116,7 +118,8 @@ TimerWidget::TimerWidget(QWidget *parent, obs_data_t *savedData) : QWidget(paren
 	connect(m_engine, &TimerEngine::finished, this, &TimerWidget::OnFinished);
 	connect(m_engine, &TimerEngine::stateChanged, this, &TimerWidget::OnStateChanged);
 
-	m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
+	ApplyEngineConfig();
+	m_lastTickMs = m_engine->currentTimeMs();
 	UpdateSubLabel();
 	UpdateDisplay(m_engine->currentTimeMs());
 	UpdateStateVisuals();
@@ -339,6 +342,12 @@ void TimerWidget::UpdateMeta()
 	if (!m_data.endActions.isEmpty())
 		info << (m_data.endActions.size() == 1 ? QString("1 end action")
 						       : QString("%1 end actions").arg(m_data.endActions.size()));
+	if (!m_data.timedActions.isEmpty())
+		info << QString("%1 timed trigger%2")
+				.arg(m_data.timedActions.size())
+				.arg(m_data.timedActions.size() == 1 ? "" : "s");
+	if (m_data.overtime && m_data.timerType != TimerType::Stopwatch)
+		info << "Overtime";
 	if (m_data.resetOnStreamStart && m_data.startOnStreamStart)
 		info << "Restarts with stream";
 	else if (m_data.startOnStreamStart)
@@ -354,12 +363,9 @@ void TimerWidget::UpdateSubLabel()
 {
 	QString text;
 	switch (m_engine->timerType()) {
-	case TimerType::Countdown: {
-		DisplayFormat timeOnly = m_data.display;
-		timeOnly.useFormatString = false;
-		text = QString("of %1").arg(FormatTimerDisplay(timeOnly, m_engine->initialMs()));
+	case TimerType::Countdown:
+		text = QString("of %1").arg(FormatTimerDisplay(m_data.display, m_engine->initialMs()));
 		break;
-	}
 	case TimerType::TimeUntil: {
 		const QDateTime target = m_engine->targetDateTime();
 		if (!target.isValid())
@@ -421,7 +427,8 @@ void TimerWidget::UpdateStateVisuals()
 
 	// Size goes in the stylesheet too: OBS themes style QLabel fonts, which
 	// overrides setFont()
-	const QString timeColor = (state == TimerState::Paused || state == TimerState::Finished)
+	const QString timeColor = m_inOvertime ? QString("color: %1;").arg(kFinishedColor.name())
+				  : (state == TimerState::Paused || state == TimerState::Finished)
 					  ? QString("color: %1;").arg(color.name())
 					  : QString();
 	m_timeDisplay->setStyleSheet("font-size: 32px; font-weight: bold;" + timeColor);
@@ -488,10 +495,19 @@ void TimerWidget::InitAsType(TimerType type)
 		m_data.targetDateTime = QDateTime(now.date(), QTime(now.time().hour(), 0)).addSecs(2 * 3600);
 	}
 
-	m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
+	ApplyEngineConfig();
 	UpdateHeaderLabels();
 	UpdateSubLabel();
 	UpdateDisplay(m_engine->currentTimeMs());
+}
+
+void TimerWidget::ApplyEngineConfig()
+{
+	m_engine->setOvertime(m_data.overtime && m_data.timerType != TimerType::Stopwatch);
+	m_engine->setResolution(m_data.display.fractionDigits == 0   ? 1000
+				: m_data.display.fractionDigits == 1 ? 100
+								     : 10);
+	m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
 }
 
 void TimerWidget::StartTimer()
@@ -519,12 +535,17 @@ void TimerWidget::ToggleStartPause()
 void TimerWidget::RestartTimer()
 {
 	m_actionExecutor->cancel();
+	for (auto *executor : m_timedExecutors)
+		executor->cancel();
 	m_engine->restart();
 	UpdateSubLabel();
 }
 
 void TimerWidget::OnTick(long long currentMs)
 {
+	if (m_engine->state() == TimerState::Running)
+		RunTimedActions(m_lastTickMs, currentMs);
+	m_lastTickMs = currentMs;
 	m_data.timeLeftMs = currentMs;
 	UpdateDisplay(currentMs);
 	// Add-time moves a time-until target
@@ -535,20 +556,70 @@ void TimerWidget::OnTick(long long currentMs)
 void TimerWidget::OnFinished()
 {
 	obs_log(LOG_INFO, "Timer %s finished", m_data.timerId.toUtf8().constData());
+	EmitEvent("TimerFinished");
 
-	if (!m_data.endActions.isEmpty()) {
-		// %time% in Set Text steps is the bare time value, without the
-		// timer's own format string wrapped around it.
-		DisplayFormat timeOnly = m_data.display;
-		timeOnly.useFormatString = false;
+	if (!m_data.endActions.isEmpty())
 		m_actionExecutor->execute(m_data.endActions, m_data.selectedTextSource,
-					  FormatTimerDisplay(timeOnly, m_engine->currentTimeMs()));
+					  Placeholders(m_engine->currentTimeMs()));
+}
+
+void TimerWidget::RunTimedActions(long long previousMs, long long currentMs)
+{
+	// Countdowns pass a point on the way down, stopwatches on the way up
+	const bool up = m_engine->timerType() == TimerType::Stopwatch;
+	for (int i = 0; i < m_data.timedActions.size(); i++) {
+		const long long at = m_data.timedActions[i].atSeconds * 1000LL;
+		if (up ? !(previousMs < at && currentMs >= at) : !(previousMs > at && currentMs <= at))
+			continue;
+		while (m_timedExecutors.size() <= i)
+			m_timedExecutors.append(new ActionExecutor(this));
+		m_timedExecutors[i]->execute(m_data.timedActions[i].steps, m_data.selectedTextSource,
+					     Placeholders(currentMs));
 	}
+}
+
+QHash<QString, QString> TimerWidget::Placeholders(long long timeMs) const
+{
+	QHash<QString, QString> values = {{"time", FormatTimerDisplay(m_data.display, timeMs)},
+					  {"name", DisplayLabel()},
+					  {"target", QString()},
+					  {"percent", QString()}};
+	// When a countdown or time-until timer reaches zero
+	if (m_engine->timerType() != TimerType::Stopwatch)
+		values["target"] = QLocale().toString(QDateTime::currentDateTime().addMSecs(qMax(0LL, timeMs)).time(),
+						      QLocale::ShortFormat);
+	if (m_engine->timerType() == TimerType::Countdown && m_engine->initialMs() > 0)
+		values["percent"] = QString::number(
+			qBound(0LL, (m_engine->initialMs() - timeMs) * 100 / m_engine->initialMs(), 100LL));
+	return values;
+}
+
+void TimerWidget::EmitEvent(const char *type) const
+{
+	obs_data_t *data = Describe();
+	EmitWebsocketEvent(type, data);
+	obs_data_release(data);
+}
+
+obs_data_t *TimerWidget::Describe() const
+{
+	static const char *kStates[] = {"stopped", "running", "paused", "finished"};
+	static const char *kTypes[] = {"countdown", "stopwatch", "timeUntil"};
+	obs_data_t *obj = obs_data_create();
+	obs_data_set_string(obj, "id", m_data.timerId.toUtf8().constData());
+	obs_data_set_string(obj, "name", DisplayLabel().toUtf8().constData());
+	obs_data_set_string(obj, "type", kTypes[static_cast<int>(m_engine->timerType())]);
+	obs_data_set_string(obj, "state", kStates[static_cast<int>(m_engine->state())]);
+	obs_data_set_int(obj, "timeMs", m_engine->currentTimeMs());
+	obs_data_set_string(obj, "time",
+			    FormatTimerDisplay(m_data.display, m_engine->currentTimeMs()).toUtf8().constData());
+	return obj;
 }
 
 void TimerWidget::OnStateChanged(TimerState newState)
 {
 	m_data.state = newState;
+	EmitEvent("TimerStateChanged");
 	// A new run may have picked up a pending configuration
 	UpdateSubLabel();
 	UpdateStateVisuals();
@@ -559,12 +630,8 @@ void TimerWidget::OnStateChanged(TimerState newState)
 
 void TimerWidget::UpdateDisplay(long long timeMs)
 {
-	QString displayText = FormatTimerDisplay(m_data.display, timeMs);
-
 	// The dock shows the bare time; the format string is for the source
-	DisplayFormat timeOnly = m_data.display;
-	timeOnly.useFormatString = false;
-	const QString timeText = FormatTimerDisplay(timeOnly, timeMs);
+	const QString timeText = FormatTimerDisplay(m_data.display, timeMs);
 	m_timeDisplay->setText(timeText);
 	m_compactTime->setText(timeText);
 
@@ -580,10 +647,24 @@ void TimerWidget::UpdateDisplay(long long timeMs)
 
 	// Once finished, the source shows the timer's finished text if it has
 	// one. End actions run after this, so a Set Text step still wins.
-	if (m_engine->state() == TimerState::Finished && !m_data.finishedText.isEmpty())
-		UpdateSourceText(m_data.finishedText);
-	else
-		UpdateSourceText(displayText);
+	const QString sourceText = m_engine->state() == TimerState::Finished && !m_data.finishedText.isEmpty()
+					   ? m_data.finishedText
+					   : ExpandPlaceholders(TemplateText(m_data.display), Placeholders(timeMs));
+	UpdateSourceText(sourceText);
+
+	TimerSnapshot snapshot;
+	snapshot.text = sourceText;
+	snapshot.timeMs = timeMs;
+	snapshot.countsDown = m_engine->timerType() != TimerType::Stopwatch;
+	if (showProgress)
+		snapshot.progress = qBound(0.0, static_cast<double>(timeMs) / initial, 1.0);
+	PublishTimerSnapshot(m_data.timerId, snapshot);
+
+	// Overtime shows in the finished color
+	if ((timeMs < 0) != m_inOvertime) {
+		m_inOvertime = timeMs < 0;
+		UpdateStateVisuals();
+	}
 }
 
 void TimerWidget::UpdateSourceText(const QString &text)
@@ -676,7 +757,7 @@ void TimerWidget::OpenSettings()
 		RegisterHotkeys(bindings);
 		obs_data_release(bindings);
 
-		m_engine->configure(m_data.timerType, m_data.countdownDuration, m_data.targetDateTime);
+		ApplyEngineConfig();
 		UpdateHeaderLabels();
 		UpdateSubLabel();
 		UpdateMeta();
@@ -781,6 +862,8 @@ void TimerWidget::StopAll()
 {
 	m_engine->stop();
 	m_actionExecutor->cancel();
+	for (auto *executor : m_timedExecutors)
+		executor->cancel();
 }
 
 void TimerWidget::SaveData(obs_data_t *obj)
@@ -814,6 +897,9 @@ void TimerWidget::SaveData(obs_data_t *obj)
 	obs_data_set_bool(obj, "showMinutes", m_data.display.showMinutes);
 	obs_data_set_bool(obj, "showSeconds", m_data.display.showSeconds);
 	obs_data_set_bool(obj, "showLeadingZero", m_data.display.showLeadingZero);
+	obs_data_set_int(obj, "fractionDigits", m_data.display.fractionDigits);
+	obs_data_set_string(obj, "overtimePrefix", m_data.display.overtimePrefix.toUtf8().constData());
+	obs_data_set_bool(obj, "overtime", m_data.overtime);
 	obs_data_set_bool(obj, "useFormatString", m_data.display.useFormatString);
 	obs_data_set_string(obj, "formatString", m_data.display.formatString.toUtf8().constData());
 
@@ -838,26 +924,23 @@ void TimerWidget::SaveData(obs_data_t *obj)
 	obs_data_set_array(obj, "addTimeHotkeys", addTimeArray);
 	obs_data_array_release(addTimeArray);
 
-	// End actions
-	obs_data_array_t *actionsArray = obs_data_array_create();
-	for (const auto &step : m_data.endActions) {
-		obs_data_t *stepObj = obs_data_create();
-		obs_data_set_int(stepObj, "type", static_cast<int>(step.type));
-		obs_data_set_string(stepObj, "text", step.text.toUtf8().constData());
-		obs_data_set_string(stepObj, "filterSourceName", step.filterSourceName.toUtf8().constData());
-		obs_data_set_string(stepObj, "filterName", step.filterName.toUtf8().constData());
-		obs_data_set_bool(stepObj, "filterEnabled", step.filterEnabled);
-		obs_data_set_string(stepObj, "sceneName", step.sceneName.toUtf8().constData());
-		obs_data_set_int(stepObj, "delayMs", step.delayMs);
-		obs_data_set_string(stepObj, "globalHotkeyName", step.globalHotkeyName.toUtf8().constData());
-		obs_data_set_string(stepObj, "sourceHotkeySourceName",
-				    step.sourceHotkeySourceName.toUtf8().constData());
-		obs_data_set_string(stepObj, "sourceHotkeyName", step.sourceHotkeyName.toUtf8().constData());
-		obs_data_array_push_back(actionsArray, stepObj);
-		obs_data_release(stepObj);
-	}
+	// End and timed actions
+	obs_data_array_t *actionsArray = SaveSteps(m_data.endActions);
 	obs_data_set_array(obj, "endActions", actionsArray);
 	obs_data_array_release(actionsArray);
+
+	obs_data_array_t *timedArray = obs_data_array_create();
+	for (const auto &group : m_data.timedActions) {
+		obs_data_t *groupObj = obs_data_create();
+		obs_data_set_int(groupObj, "atSeconds", group.atSeconds);
+		obs_data_array_t *steps = SaveSteps(group.steps);
+		obs_data_set_array(groupObj, "steps", steps);
+		obs_data_array_release(steps);
+		obs_data_array_push_back(timedArray, groupObj);
+		obs_data_release(groupObj);
+	}
+	obs_data_set_array(obj, "timedActions", timedArray);
+	obs_data_array_release(timedArray);
 }
 
 void TimerWidget::LoadData(obs_data_t *obj)
@@ -888,6 +971,10 @@ void TimerWidget::LoadData(obs_data_t *obj)
 	m_data.display.showMinutes = obs_data_get_bool(obj, "showMinutes");
 	m_data.display.showSeconds = obs_data_get_bool(obj, "showSeconds");
 	m_data.display.showLeadingZero = obs_data_get_bool(obj, "showLeadingZero");
+	m_data.display.fractionDigits = static_cast<int>(obs_data_get_int(obj, "fractionDigits"));
+	obs_data_set_default_string(obj, "overtimePrefix", "-");
+	m_data.display.overtimePrefix = obs_data_get_string(obj, "overtimePrefix");
+	m_data.overtime = obs_data_get_bool(obj, "overtime");
 	m_data.display.useFormatString = obs_data_get_bool(obj, "useFormatString");
 	m_data.display.formatString = obs_data_get_string(obj, "formatString");
 
@@ -907,26 +994,19 @@ void TimerWidget::LoadData(obs_data_t *obj)
 		obs_data_array_release(addTimeArray);
 	}
 
-	// End actions
+	// End and timed actions
 	obs_data_array_t *actionsArray = obs_data_get_array(obj, "endActions");
-	if (actionsArray) {
-		size_t count = obs_data_array_count(actionsArray);
-		for (size_t i = 0; i < count; i++) {
-			obs_data_t *stepObj = obs_data_array_item(actionsArray, i);
-			ActionStep step;
-			step.type = static_cast<ActionType>(obs_data_get_int(stepObj, "type"));
-			step.text = obs_data_get_string(stepObj, "text");
-			step.filterSourceName = obs_data_get_string(stepObj, "filterSourceName");
-			step.filterName = obs_data_get_string(stepObj, "filterName");
-			step.filterEnabled = obs_data_get_bool(stepObj, "filterEnabled");
-			step.sceneName = obs_data_get_string(stepObj, "sceneName");
-			step.delayMs = static_cast<int>(obs_data_get_int(stepObj, "delayMs"));
-			step.globalHotkeyName = obs_data_get_string(stepObj, "globalHotkeyName");
-			step.sourceHotkeySourceName = obs_data_get_string(stepObj, "sourceHotkeySourceName");
-			step.sourceHotkeyName = obs_data_get_string(stepObj, "sourceHotkeyName");
-			m_data.endActions.append(step);
-			obs_data_release(stepObj);
-		}
-		obs_data_array_release(actionsArray);
+	m_data.endActions = LoadSteps(actionsArray);
+	obs_data_array_release(actionsArray);
+
+	obs_data_array_t *timedArray = obs_data_get_array(obj, "timedActions");
+	for (size_t i = 0; i < obs_data_array_count(timedArray); i++) {
+		obs_data_t *groupObj = obs_data_array_item(timedArray, i);
+		obs_data_array_t *steps = obs_data_get_array(groupObj, "steps");
+		m_data.timedActions.append(
+			{static_cast<int>(obs_data_get_int(groupObj, "atSeconds")), LoadSteps(steps)});
+		obs_data_array_release(steps);
+		obs_data_release(groupObj);
 	}
+	obs_data_array_release(timedArray);
 }
