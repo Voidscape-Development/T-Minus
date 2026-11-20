@@ -5,6 +5,8 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 
+#include <climits>
+
 #include "timer-data.hpp"
 
 class TimerEngine : public QObject {
@@ -23,6 +25,11 @@ public:
 	void restart();
 	void stop();
 	void addTime(int deltaMs);
+	// Countdown and time-until keep running past zero (finished() still
+	// fires once, at zero)
+	void setOvertime(bool overtime) { m_overtime = overtime; }
+	// How often tick() fires while running: 1000, 100 or 10 ms
+	void setResolution(int ms);
 
 	TimerState state() const { return m_state; }
 	TimerType timerType() const { return m_type; }
@@ -65,5 +72,8 @@ private:
 	long long m_timeMs = 0;
 	QElapsedTimer m_elapsed;
 	long long m_msAtStart = 0;
-	long long m_lastDisplayedSeconds = -1;
+	long long m_lastUnit = LLONG_MIN;
+	int m_resolution = 1000;
+	bool m_overtime = false;
+	bool m_finishFired = false;
 };

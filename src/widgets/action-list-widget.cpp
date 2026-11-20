@@ -1,5 +1,6 @@
 #include "action-list-widget.hpp"
 #include "drag-reorder.hpp"
+#include "tminus-dock.hpp"
 #include "button-style.hpp"
 #include "../utils/format-utils.hpp"
 
@@ -73,21 +74,27 @@ void PopulateScenes(QComboBox *combo)
 	combo->addItems(names);
 }
 
-// Every source plus the scenes (which can carry filters and hotkeys too)
-void PopulateSources(QComboBox *combo)
+// Every source plus the scenes (which can carry filters and hotkeys too), or
+// with flags, only the sources that have one of those output flags
+void PopulateSources(QComboBox *combo, uint32_t flags = 0)
 {
 	combo->clear();
-	QStringList names;
+	struct EnumData {
+		QStringList names;
+		uint32_t flags;
+	} data = {{}, flags};
 	obs_enum_sources(
-		[](void *data, obs_source_t *source) -> bool {
+		[](void *param, obs_source_t *source) -> bool {
+			auto *d = static_cast<EnumData *>(param);
 			const char *name = obs_source_get_name(source);
-			if (name && name[0])
-				static_cast<QStringList *>(data)->append(QString::fromUtf8(name));
+			if (name && name[0] && (!d->flags || (obs_source_get_output_flags(source) & d->flags)))
+				d->names.append(QString::fromUtf8(name));
 			return true;
 		},
-		&names);
+		&data);
 
-	for (const QString &scene : SceneNames()) {
+	QStringList &names = data.names;
+	for (const QString &scene : flags ? QStringList() : SceneNames()) {
 		if (!names.contains(scene))
 			names.append(scene);
 	}
@@ -114,6 +121,28 @@ void PopulateFilters(QComboBox *combo, const QString &sourceName)
 		combo);
 
 	obs_source_release(source);
+}
+
+// The sources directly in a scene
+void PopulateSceneItems(QComboBox *combo, const QString &sceneName)
+{
+	combo->clear();
+	obs_source_t *source = obs_get_source_by_name(sceneName.toUtf8().constData());
+	obs_scene_t *scene = obs_scene_from_source(source);
+	QStringList names;
+	if (scene) {
+		obs_scene_enum_items(
+			scene,
+			[](obs_scene_t *, obs_sceneitem_t *item, void *data) {
+				static_cast<QStringList *>(data)->append(
+					QString::fromUtf8(obs_source_get_name(obs_sceneitem_get_source(item))));
+				return true;
+			},
+			&names);
+	}
+	obs_source_release(source);
+	NaturalSort(names);
+	combo->addItems(names);
 }
 
 void PopulateGlobalHotkeys(QComboBox *combo)
@@ -240,6 +269,16 @@ QString ActionStepCard::TypeName(ActionType type)
 		return "Press OBS Hotkey";
 	case ActionType::TriggerSourceHotkey:
 		return "Press Source Hotkey";
+	case ActionType::SourceVisibility:
+		return "Show/Hide Source";
+	case ActionType::MediaControl:
+		return "Control Media";
+	case ActionType::AudioControl:
+		return "Mute or Set Volume";
+	case ActionType::OutputControl:
+		return "Stream, Record or Replay";
+	case ActionType::TimerControl:
+		return "Control Timer";
 	}
 	return "Unknown";
 }
@@ -319,6 +358,21 @@ void ActionStepCard::BuildFields()
 	case ActionType::TriggerSourceHotkey:
 		BuildSourceHotkey();
 		break;
+	case ActionType::SourceVisibility:
+		BuildSourceVisibility();
+		break;
+	case ActionType::MediaControl:
+		BuildMediaControl();
+		break;
+	case ActionType::AudioControl:
+		BuildAudioControl();
+		break;
+	case ActionType::OutputControl:
+		BuildOutputControl();
+		break;
+	case ActionType::TimerControl:
+		BuildTimerControl();
+		break;
 	}
 }
 
@@ -328,7 +382,7 @@ void ActionStepCard::BuildFields()
 void ActionStepCard::BuildSetText()
 {
 	auto *edit = new QLineEdit(m_step.text, this);
-	edit->setPlaceholderText("Text for the timer's source (supports %time%)");
+	edit->setPlaceholderText("Text for the timer's source (supports %time%, %name%, %target%)");
 	edit->setAccessibleName("Text");
 	m_fieldsRow->addWidget(edit, 1);
 	connect(edit, &QLineEdit::textChanged, this, [this](const QString &text) { m_step.text = text; });
@@ -440,6 +494,121 @@ void ActionStepCard::BuildSourceHotkey()
 	connect(hotkey, &QComboBox::currentTextChanged, this, store);
 }
 
+QComboBox *ActionStepCard::AddModeCombo(const QStringList &labels)
+{
+	QComboBox *combo = AddCombo("Action", 0);
+	combo->addItems(labels);
+	combo->setCurrentIndex(qBound(0, m_step.mode, labels.size() - 1));
+	m_step.mode = combo->currentIndex();
+	connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int i) { m_step.mode = i; });
+	return combo;
+}
+
+QDoubleSpinBox *ActionStepCard::AddValueSpin(double min, double max, const QString &suffix)
+{
+	auto *spin = new QDoubleSpinBox(this);
+	spin->setRange(min, max);
+	spin->setDecimals(suffix == " dB" ? 1 : 0);
+	spin->setSuffix(suffix);
+	spin->setValue(m_step.value);
+	m_step.value = spin->value();
+	m_fieldsRow->addWidget(spin);
+	connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+		[this](double v) { m_step.value = v; });
+	return spin;
+}
+
+// Shows the value field only for the mode that uses it
+static void ShowValueFor(QComboBox *mode, QDoubleSpinBox *value, int valueMode)
+{
+	auto update = [mode, value, valueMode]() {
+		value->setVisible(mode->currentIndex() == valueMode);
+	};
+	update();
+	QObject::connect(mode, QOverload<int>::of(&QComboBox::currentIndexChanged), value, update);
+}
+
+void ActionStepCard::BuildSourceVisibility()
+{
+	QComboBox *scene = AddCombo("Scene");
+	QComboBox *source = AddCombo("Source");
+	QComboBox *state = AddCombo("Show or hide", 0);
+	state->addItem("Show", true);
+	state->addItem("Hide", false);
+
+	PopulateScenes(scene);
+	if (!SelectOrKeep(scene, m_step.sceneName))
+		m_missing << QString::fromUtf8("scene “%1”").arg(m_step.sceneName);
+	PopulateSceneItems(source, scene->currentText());
+	if (!SelectOrKeep(source, m_step.targetName) && m_missing.isEmpty())
+		m_missing << QString::fromUtf8("source “%1”").arg(m_step.targetName);
+	state->setCurrentIndex(m_step.filterEnabled ? 0 : 1);
+
+	auto store = [this, scene, source, state]() {
+		m_step.sceneName = scene->currentText();
+		m_step.targetName = source->currentText();
+		m_step.filterEnabled = state->currentData().toBool();
+	};
+	store();
+	connect(scene, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [scene, source, store](int) {
+		PopulateSceneItems(source, scene->currentText());
+		store();
+	});
+	connect(source, QOverload<int>::of(&QComboBox::currentIndexChanged), this, store);
+	connect(state, QOverload<int>::of(&QComboBox::currentIndexChanged), this, store);
+}
+
+void ActionStepCard::BuildMediaControl()
+{
+	QComboBox *source = AddCombo("Media source");
+	PopulateSources(source, OBS_SOURCE_CONTROLLABLE_MEDIA);
+	if (!SelectOrKeep(source, m_step.targetName))
+		m_missing << QString::fromUtf8("source “%1”").arg(m_step.targetName);
+	m_step.targetName = source->currentText();
+	connect(source, &QComboBox::currentTextChanged, this, [this](const QString &t) { m_step.targetName = t; });
+	AddModeCombo({"Play", "Pause", "Restart", "Stop"});
+}
+
+void ActionStepCard::BuildAudioControl()
+{
+	QComboBox *source = AddCombo("Audio source");
+	PopulateSources(source, OBS_SOURCE_AUDIO);
+	if (!SelectOrKeep(source, m_step.targetName))
+		m_missing << QString::fromUtf8("source “%1”").arg(m_step.targetName);
+	m_step.targetName = source->currentText();
+	connect(source, &QComboBox::currentTextChanged, this, [this](const QString &t) { m_step.targetName = t; });
+	QComboBox *mode = AddModeCombo({"Mute", "Unmute", "Toggle mute", "Set volume"});
+	ShowValueFor(mode, AddValueSpin(-100.0, 26.0, " dB"), static_cast<int>(AudioMode::SetVolume));
+}
+
+void ActionStepCard::BuildOutputControl()
+{
+	AddModeCombo({"Start streaming", "Stop streaming", "Start recording", "Stop recording", "Pause recording",
+		      "Resume recording", "Start replay buffer", "Stop replay buffer", "Save replay"});
+	m_fieldsRow->addStretch();
+}
+
+void ActionStepCard::BuildTimerControl()
+{
+	QComboBox *timer = AddCombo("Timer");
+	if (TMinusDock *dock = TMinusDock::instance()) {
+		for (TimerWidget *t : dock->timers())
+			timer->addItem(t->DisplayLabel(), t->timerId());
+	}
+	int idx = timer->findData(m_step.targetName);
+	if (idx < 0 && !m_step.targetName.isEmpty()) {
+		timer->addItem(QString::fromUtf8("%1 (not found)").arg(m_step.targetName), m_step.targetName);
+		idx = timer->count() - 1;
+		m_missing << "timer";
+	}
+	timer->setCurrentIndex(qMax(idx, 0));
+	m_step.targetName = timer->currentData().toString();
+	connect(timer, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		[this, timer](int) { m_step.targetName = timer->currentData().toString(); });
+	QComboBox *mode = AddModeCombo({"Start", "Pause", "Reset", "Add time"});
+	ShowValueFor(mode, AddValueSpin(-86400, 86400, " s"), static_cast<int>(TimerControlMode::AddTime));
+}
+
 // --- ActionListWidget ---
 
 ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
@@ -460,8 +629,8 @@ ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
 	m_cardsLayout->setContentsMargins(0, 0, 4, 0);
 	m_cardsLayout->setSpacing(6);
 
-	m_emptyLabel = new QLabel("No steps yet. Add one to switch scenes, toggle filters, set text or press "
-				  "hotkeys when the timer ends.",
+	m_emptyLabel = new QLabel("No steps yet. Add one to switch scenes, show sources, control media and "
+				  "audio, start or stop outputs and other timers, set text or press hotkeys.",
 				  content);
 	m_emptyLabel->setWordWrap(true);
 	m_emptyLabel->setStyleSheet("color: rgba(127, 127, 127, 100%);");
@@ -504,7 +673,10 @@ ActionListWidget::ActionListWidget(QWidget *parent) : QWidget(parent)
 			});
 		}
 	};
-	addSection("Scenes and sources", {ActionType::SwitchScene, ActionType::EnableFilter, ActionType::SetText});
+	addSection("Scenes and sources", {ActionType::SwitchScene, ActionType::SourceVisibility,
+					  ActionType::EnableFilter, ActionType::SetText});
+	addSection("Media and audio", {ActionType::MediaControl, ActionType::AudioControl});
+	addSection("OBS and timers", {ActionType::OutputControl, ActionType::TimerControl});
 	addSection("Hotkeys", {ActionType::TriggerGlobalHotkey, ActionType::TriggerSourceHotkey});
 	addSection("Timing", {ActionType::Delay});
 	m_addBtn->setMenu(addMenu);

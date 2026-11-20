@@ -33,9 +33,17 @@ void TimerEngine::applyConfig()
 	m_targetDateTime = m_configTarget;
 }
 
+void TimerEngine::setResolution(int ms)
+{
+	m_resolution = ms;
+	// Hundredths can't change faster than OBS renders, so ~60 Hz is enough
+	m_tickTimer->setInterval(qMin(TIMER_TICK_INTERVAL, ms < 100 ? 15 : ms));
+}
+
 void TimerEngine::resetTime()
 {
-	m_lastDisplayedSeconds = -1;
+	m_lastUnit = LLONG_MIN;
+	m_finishFired = false;
 
 	switch (m_type) {
 	case TimerType::Countdown:
@@ -46,7 +54,7 @@ void TimerEngine::resetTime()
 		break;
 	case TimerType::TimeUntil:
 		m_timeMs = QDateTime::currentDateTime().msecsTo(m_targetDateTime);
-		if (m_timeMs < 0)
+		if (m_timeMs < 0 && !m_overtime)
 			m_timeMs = 0;
 		break;
 	}
@@ -64,10 +72,10 @@ void TimerEngine::start()
 		resetTime();
 	}
 
-	m_lastDisplayedSeconds = -1;
+	m_lastUnit = LLONG_MIN;
 	m_elapsed.start();
 	m_msAtStart = m_timeMs;
-	m_tickTimer->start(TIMER_TICK_INTERVAL);
+	m_tickTimer->start();
 	setState(TimerState::Running);
 }
 
@@ -114,7 +122,7 @@ void TimerEngine::setTimeMs(long long ms)
 		m_targetDateTime = QDateTime::currentDateTime().addMSecs(ms);
 
 	m_timeMs = ms;
-	if (m_timeMs < 0)
+	if (m_timeMs < 0 && (!m_overtime || m_type == TimerType::Stopwatch))
 		m_timeMs = 0;
 
 	if (m_state == TimerState::Running) {
@@ -122,7 +130,7 @@ void TimerEngine::setTimeMs(long long ms)
 		m_msAtStart = m_timeMs;
 	}
 
-	m_lastDisplayedSeconds = m_timeMs / 1000;
+	m_lastUnit = m_timeMs / m_resolution;
 	emit tick(m_timeMs);
 }
 
@@ -138,7 +146,8 @@ void TimerEngine::finish()
 {
 	m_timeMs = 0;
 	m_tickTimer->stop();
-	m_lastDisplayedSeconds = 0;
+	m_lastUnit = 0;
+	m_finishFired = true;
 	emit tick(m_timeMs);
 	setState(TimerState::Finished);
 	emit finished();
@@ -146,31 +155,28 @@ void TimerEngine::finish()
 
 void TimerEngine::onTick()
 {
-	switch (m_type) {
-	case TimerType::Countdown:
-		m_timeMs = m_msAtStart - m_elapsed.elapsed();
-		if (m_timeMs <= 0) {
-			finish();
-			return;
-		}
-		break;
-
-	case TimerType::Stopwatch:
+	if (m_type == TimerType::Stopwatch) {
 		m_timeMs = m_msAtStart + m_elapsed.elapsed();
-		break;
-
-	case TimerType::TimeUntil:
-		m_timeMs = QDateTime::currentDateTime().msecsTo(m_targetDateTime);
-		if (m_timeMs <= 0) {
+	} else {
+		m_timeMs = m_type == TimerType::Countdown ? m_msAtStart - m_elapsed.elapsed()
+							  : QDateTime::currentDateTime().msecsTo(m_targetDateTime);
+		if (m_timeMs <= 0 && !m_overtime) {
 			finish();
 			return;
 		}
-		break;
 	}
 
-	long long currentSeconds = m_timeMs / 1000;
-	if (currentSeconds != m_lastDisplayedSeconds) {
-		m_lastDisplayedSeconds = currentSeconds;
+	// Floored, so overtime shows -0:00 as soon as it passes zero
+	const long long unit = (m_timeMs < 0 ? m_timeMs - m_resolution + 1 : m_timeMs) / m_resolution;
+	if (unit != m_lastUnit) {
+		m_lastUnit = unit;
 		emit tick(m_timeMs);
+	}
+
+	// Overtime runs on past zero: the end actions fire once, the timer
+	// keeps going
+	if (m_timeMs <= 0 && m_type != TimerType::Stopwatch && !m_finishFired) {
+		m_finishFired = true;
+		emit finished();
 	}
 }

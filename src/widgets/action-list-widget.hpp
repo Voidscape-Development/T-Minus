@@ -44,6 +44,15 @@ private:
 	void BuildDelay();
 	void BuildGlobalHotkey();
 	void BuildSourceHotkey();
+	void BuildSourceVisibility();
+	void BuildMediaControl();
+	void BuildAudioControl();
+	void BuildOutputControl();
+	void BuildTimerControl();
+	// A combo of choices stored in m_step.mode
+	QComboBox *AddModeCombo(const QStringList &labels);
+	// A number field stored in m_step.value
+	QDoubleSpinBox *AddValueSpin(double min, double max, const QString &suffix);
 
 	// Selects name in combo. Returns false when the name had to be added
 	// because it isn't available right now (e.g. a deleted scene).

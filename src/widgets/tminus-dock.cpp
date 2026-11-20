@@ -1,6 +1,8 @@
 #include "tminus-dock.hpp"
 #include "drag-reorder.hpp"
 #include "button-style.hpp"
+#include "../core/action-executor.hpp"
+#include "../core/websocket-api.hpp"
 #include "../utils/obs-utils.hpp"
 #include "../plugin-support.h"
 
@@ -17,14 +19,37 @@
 TMinusDock::TMinusDock(QWidget *parent) : QWidget(parent)
 {
 	qRegisterMetaType<obs_data_t *>("obs_data_t*");
+	s_instance = this;
 
 	SetupUI();
+
+	ActionExecutor::timerControl = [this](const QString &id, TimerControlMode mode, int seconds) {
+		TimerWidget *timer = FindTimer(id);
+		if (!timer)
+			return;
+		switch (mode) {
+		case TimerControlMode::Start:
+			timer->StartTimer();
+			break;
+		case TimerControlMode::Pause:
+			timer->PauseTimer();
+			break;
+		case TimerControlMode::Reset:
+			timer->RestartTimer();
+			break;
+		case TimerControlMode::AddTime:
+			timer->AddTime(seconds * 1000LL);
+			break;
+		}
+	};
 
 	obs_frontend_add_event_callback(OBSFrontendEventHandler, this);
 }
 
 TMinusDock::~TMinusDock()
 {
+	s_instance = nullptr;
+	ActionExecutor::timerControl = nullptr;
 	obs_frontend_remove_event_callback(OBSFrontendEventHandler, this);
 	if (!m_exitSaveDone)
 		SaveSettings();
@@ -328,6 +353,19 @@ void TMinusDock::SetCompact(bool compact)
 		QSignalBlocker blocker(m_compactBtn);
 		m_compactBtn->setChecked(compact);
 	}
+}
+
+TimerWidget *TMinusDock::FindTimer(const QString &idOrName) const
+{
+	for (auto *timer : m_timers) {
+		if (timer->timerId() == idOrName)
+			return timer;
+	}
+	for (auto *timer : m_timers) {
+		if (timer->DisplayLabel() == idOrName)
+			return timer;
+	}
+	return nullptr;
 }
 
 void TMinusDock::StartAllTimers()
@@ -708,6 +746,7 @@ void TMinusDock::OBSFrontendEventHandler(enum obs_frontend_event event, void *da
 		break;
 
 	case OBS_FRONTEND_EVENT_EXIT:
+		ShutdownWebsocketVendor();
 		dock->SaveSettings();
 		dock->m_exitSaveDone = true;
 		break;

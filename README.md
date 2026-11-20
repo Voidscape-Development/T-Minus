@@ -14,6 +14,8 @@ T-Minus is an OBS Studio plugin for running countdowns, stopwatches and "time un
 
 Countdowns and stopwatches are measured on a monotonic clock, so changes to the system clock don't make them jump. Time Until timers follow the wall clock.
 
+Countdown and Time Until timers can optionally run into **overtime**: instead of stopping at zero they keep counting, shown with a prefix of your choice (`-0:15` by default). Their end steps still run once, at zero.
+
 ### The T-Minus dock
 
 - Add as many timers as you need, and reorder them by dragging.
@@ -26,7 +28,11 @@ Countdowns and stopwatches are measured on a monotonic clock, so changes to the 
 ### Showing a timer on stream
 
 - Link each timer to a **text source** (Text (GDI+) on Windows, Text (FreeType 2) on macOS and Linux) and T-Minus keeps the source up to date.
-- Wrap the time in your own text with `%time%`, for example `Starting in %time%`.
+- Wrap the time in your own text with placeholders, for example `Starting in %time%` or `Back at %target%`:
+  - `%time%`: the time
+  - `%name%`: the timer's name
+  - `%target%`: the clock time the timer reaches zero
+  - `%percent%`: how far through a countdown it is (0 to 100)
 - Pick a time format:
   - Auto, which hides hours and days while they're zero
   - `H:MM:SS`, `MM:SS` or `D:HH:MM:SS`
@@ -34,20 +40,38 @@ Countdowns and stopwatches are measured on a monotonic clock, so changes to the 
   - Custom, where you choose which units to show
 - Hidden larger units carry into the first unit shown, so 1 hour 5 minutes in `MM:SS` reads `65:00`.
 - Optionally pad the first unit (`05:00` rather than `5:00`).
+- Optionally show tenths or hundredths of a second (`0:05.3`, `0:05.27`).
 - Optionally replace the time with your own text once the timer ends, such as "We're live!".
 
-### When the timer reaches zero
+### The T-Minus Timer source
 
-Countdown and Time Until timers can run a sequence of steps when they finish:
+Add a **T-Minus Timer** source to a scene instead of linking a text source. It shows the timer's text (with its format string and finished text) and draws it through its own shader, so it looks the same on every platform:
 
-- **Set Text**: write text to the timer's text source (supports `%time%`).
-- **Enable/Disable Filter**: turn a filter on a source on or off.
-- **Switch Scene**: change the program scene.
-- **Wait**: pause the sequence for a set time.
-- **Press OBS Hotkey**: trigger any OBS hotkey.
-- **Press Source Hotkey**: trigger a hotkey that belongs to a source.
+- **Text**: font, outline, alignment, and a minimum width so the source doesn't resize as the digits change.
+- **Fill**: solid, or a two- or three-color gradient, linear (at any angle) or radial, optionally animated.
+- **Warning** and **Final seconds**: their own colors or gradients from a number of seconds left, with an optional smooth fade between states and a pulse in the final seconds.
+- **Progress** (countdowns): a bar below, above or behind the text, or a ring around it, with rounded ends, a track color, and its own gradient or the text's colors.
+- **Background**: a panel behind everything, with its own color or gradient, padding and corner radius.
 
-Steps run top to bottom. **Test Run** lets you try the sequence right away, and resetting or restarting the timer cancels a sequence that is still running.
+### Actions
+
+On the timer's **Actions** page you can run a sequence of steps when a countdown or Time Until timer reaches zero, and add **time triggers** that run their own steps while the timer runs: when the time left passes a point (for example 0:30 left), or for stopwatches when the time elapsed does (for example 1:00:00 of uptime).
+
+| Step | What it does |
+|------|--------------|
+| **Switch Scene** | Changes the program scene. |
+| **Show/Hide Source** | Shows or hides a source in a scene. |
+| **Enable/Disable Filter** | Turns a filter on a source on or off. |
+| **Set Text** | Writes text to the timer's text source (supports the placeholders above). |
+| **Control Media** | Plays, pauses, restarts or stops a media source. |
+| **Mute or Set Volume** | Mutes, unmutes or toggles an audio source, or sets its volume in dB. |
+| **Stream, Record or Replay** | Starts or stops streaming, recording or the replay buffer, pauses or resumes recording, or saves a replay. |
+| **Control Timer** | Starts, pauses, resets or adds time to another timer, so timers can be chained. |
+| **Press OBS Hotkey** | Triggers any OBS hotkey. |
+| **Press Source Hotkey** | Triggers a hotkey that belongs to a source. |
+| **Wait** | Pauses the sequence for a set time. |
+
+Steps run top to bottom. **Test Run** lets you try a sequence right away, and resetting or restarting the timer cancels sequences that are still running.
 
 ### When streaming starts
 
@@ -65,6 +89,20 @@ You bind all T-Minus hotkeys in **OBS Settings › Hotkeys**:
 - **T-Minus: Start All Timers** and **T-Minus: Pause All Timers**
 - Per timer: **Start/Pause** and **Restart**, listed as `T-Minus: … (timer name)`
 - Per timer: **add-time amounts**. Each amount you define (positive to add time, negative to subtract) gets its own hotkey, and the first three also appear as buttons on the timer in the dock.
+
+### Remote control (obs-websocket)
+
+With obs-websocket (built into OBS), T-Minus registers the vendor `t-minus`. Send requests with `CallVendorRequest` (`vendorName: "t-minus"`), naming a timer by ID or name in `timer`:
+
+| Request | Data | Notes |
+|---------|------|-------|
+| `GetTimers` | | Returns `timers`: each timer's `id`, `name`, `type`, `state`, `timeMs` and `time`. |
+| `StartTimer`, `PauseTimer`, `ResetTimer` | `timer` (optional) | Without `timer`, applies to every timer. |
+| `ToggleTimer` | `timer` | Starts or pauses. |
+| `AddTime` | `timer`, `seconds` | Negative values subtract time. |
+| `SetTime` | `timer`, `seconds` | Sets the time left (or elapsed, for stopwatches). |
+
+Each response has `success`, plus `error` when it fails. T-Minus also emits the vendor events `TimerStateChanged` and `TimerFinished` with the same fields as `GetTimers`, so tools such as Stream Deck and Touch Portal can follow along.
 
 ## Requirements
 

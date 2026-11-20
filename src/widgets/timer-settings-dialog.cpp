@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLocale>
+#include <QMenu>
 #include <QScrollArea>
 #include <QVBoxLayout>
 
@@ -103,7 +104,7 @@ void TimerSettingsDialog::SetupUI()
 	m_nav->setFixedWidth(160);
 	m_nav->setFrameShape(QFrame::NoFrame);
 	m_nav->setSpacing(2);
-	m_nav->addItems({"Timer", "Output", "On finish", "Hotkeys"});
+	m_nav->addItems({"Timer", "Output", "Actions", "Hotkeys"});
 	body->addWidget(m_nav);
 
 	auto *divider = new QFrame(this);
@@ -254,6 +255,22 @@ QWidget *TimerSettingsDialog::CreateTimerPage()
 	layout->addWidget(m_timeUntilBox);
 	layout->addSpacing(10);
 
+	// Overtime: countdown and time-until keep counting past zero
+	m_overtimeBox = new QWidget(page);
+	auto *overtimeRow = new QHBoxLayout(m_overtimeBox);
+	overtimeRow->setContentsMargins(0, 0, 0, 0);
+	m_overtimeCheck = new QCheckBox("Keep counting past zero (overtime), shown with", m_overtimeBox);
+	overtimeRow->addWidget(m_overtimeCheck);
+	m_overtimePrefixEdit = new QLineEdit(m_overtimeBox);
+	m_overtimePrefixEdit->setMaxLength(16);
+	m_overtimePrefixEdit->setFixedWidth(60);
+	m_overtimePrefixEdit->setAccessibleName("Overtime prefix");
+	overtimeRow->addWidget(m_overtimePrefixEdit);
+	overtimeRow->addWidget(new QLabel("in front", m_overtimeBox));
+	overtimeRow->addStretch();
+	layout->addWidget(m_overtimeBox);
+	layout->addSpacing(10);
+
 	// Stream start behaviour: one choice instead of two checkboxes
 	layout->addWidget(SectionLabel("When streaming starts", page));
 	m_streamStartCombo = new QComboBox(page);
@@ -269,6 +286,7 @@ QWidget *TimerSettingsDialog::CreateTimerPage()
 	for (QSpinBox *spin : {m_daysSpin, m_hoursSpin, m_minutesSpin, m_secondsSpin})
 		connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &TimerSettingsDialog::UpdatePreview);
 	connect(m_targetPicker, &DateTimePicker::dateTimeChanged, this, &TimerSettingsDialog::UpdatePreview);
+	connect(m_overtimePrefixEdit, &QLineEdit::textChanged, this, &TimerSettingsDialog::UpdatePreview);
 
 	return Scrollable(page);
 }
@@ -291,16 +309,24 @@ QWidget *TimerSettingsDialog::CreateOutputPage()
 	m_templateEdit = new QLineEdit(page);
 	m_templateEdit->setPlaceholderText("%time%");
 	templateRow->addWidget(m_templateEdit, 1);
-	auto *insertTime = new QPushButton("Insert %time%", page);
-	insertTime->setAutoDefault(false);
-	connect(insertTime, &QPushButton::clicked, this, [this]() {
-		m_templateEdit->insert("%time%");
-		m_templateEdit->setFocus();
-	});
-	templateRow->addWidget(insertTime);
+	auto *insertBtn = new QPushButton("Insert", page);
+	insertBtn->setAutoDefault(false);
+	auto *insertMenu = new QMenu(insertBtn);
+	const QList<QPair<QString, QString>> placeholders = {{"%time%", "The time"},
+							     {"%name%", "The timer's name"},
+							     {"%target%", "The clock time it reaches zero"},
+							     {"%percent%", "How far through the countdown (0-100)"}};
+	for (const auto &ph : placeholders) {
+		insertMenu->addAction(QString("%1  %2").arg(ph.first, ph.second), this, [this, ph]() {
+			m_templateEdit->insert(ph.first);
+			m_templateEdit->setFocus();
+		});
+	}
+	insertBtn->setMenu(insertMenu);
+	templateRow->addWidget(insertBtn);
 	layout->addLayout(templateRow);
-	layout->addWidget(HintLabel("For example “Starting in %time%”. Leave it as %time% to show just the "
-				    "time.",
+	layout->addWidget(HintLabel(QString::fromUtf8("For example “Starting in %time%” or “Back at %target%”. "
+						      "Leave it as %time% to show just the time."),
 				    page));
 	layout->addSpacing(10);
 
@@ -331,6 +357,14 @@ QWidget *TimerSettingsDialog::CreateOutputPage()
 
 	m_leadingZeroCheck = new QCheckBox("Pad the first unit (05:00 instead of 5:00)", page);
 	layout->addWidget(m_leadingZeroCheck);
+
+	auto *fractionRow = new QHBoxLayout();
+	fractionRow->addWidget(new QLabel("Fractions of a second", page));
+	m_fractionCombo = new QComboBox(page);
+	m_fractionCombo->addItems({"None", "Tenths (0:05.3)", "Hundredths (0:05.27)"});
+	fractionRow->addWidget(m_fractionCombo);
+	fractionRow->addStretch();
+	layout->addLayout(fractionRow);
 	layout->addSpacing(10);
 
 	layout->addWidget(SectionLabel("When finished, show", page));
@@ -350,6 +384,8 @@ QWidget *TimerSettingsDialog::CreateOutputPage()
 	connect(m_finishedTextEdit, &QLineEdit::textChanged, this, &TimerSettingsDialog::UpdatePreview);
 	connect(m_unitsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
 		&TimerSettingsDialog::UpdateUnitsVisibility);
+	connect(m_fractionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		&TimerSettingsDialog::UpdatePreview);
 	for (QCheckBox *check :
 	     {m_showDaysCheck, m_showHoursCheck, m_showMinutesCheck, m_showSecondsCheck, m_leadingZeroCheck})
 		connect(check, &QCheckBox::toggled, this, &TimerSettingsDialog::UpdatePreview);
@@ -364,38 +400,129 @@ QWidget *TimerSettingsDialog::CreateFinishPage()
 	layout->setContentsMargins(16, 14, 16, 14);
 	layout->setSpacing(6);
 
-	auto *header = new QHBoxLayout();
-	auto *intro = new QVBoxLayout();
-	intro->setSpacing(4);
-	intro->addWidget(SectionLabel("When the timer reaches zero", page));
-	intro->addWidget(HintLabel("Steps run top to bottom. Resetting or restarting the timer cancels a run that "
-				   "is still in progress. Set Text steps write to the timer's text source and "
-				   "support %time%.",
-				   page));
-	header->addLayout(intro, 1);
-
+	layout->addWidget(SectionLabel("Run steps", page));
+	auto *triggerRow = new QHBoxLayout();
+	m_triggerCombo = new QComboBox(page);
+	m_triggerCombo->setAccessibleName("Trigger");
+	triggerRow->addWidget(m_triggerCombo, 1);
+	auto *addTriggerBtn = new QPushButton("Add Time Trigger", page);
+	addTriggerBtn->setAutoDefault(false);
+	triggerRow->addWidget(addTriggerBtn);
+	m_removeTriggerBtn = new QPushButton("Remove", page);
+	m_removeTriggerBtn->setAutoDefault(false);
+	triggerRow->addWidget(m_removeTriggerBtn);
 	auto *testBtn = new QPushButton("Test Run", page);
 	testBtn->setAutoDefault(false);
 	testBtn->setToolTip("Run these steps now, on your live scenes and sources");
-	header->addWidget(testBtn, 0, Qt::AlignTop);
-	layout->addLayout(header);
+	triggerRow->addWidget(testBtn);
+	layout->addLayout(triggerRow);
+
+	m_triggerTimeBox = new QWidget(page);
+	auto *timeRow = new QHBoxLayout(m_triggerTimeBox);
+	timeRow->setContentsMargins(0, 0, 0, 0);
+	timeRow->addWidget(new QLabel("At", m_triggerTimeBox));
+	m_triggerTime = new QTimeEdit(m_triggerTimeBox);
+	m_triggerTime->setDisplayFormat("HH:mm:ss");
+	m_triggerTime->setAccessibleName("Trigger time");
+	timeRow->addWidget(m_triggerTime);
+	timeRow->addStretch();
+	layout->addWidget(m_triggerTimeBox);
+
+	layout->addWidget(HintLabel("Steps run top to bottom. Time triggers fire while the timer runs, when the time "
+				    "left (or, for stopwatches, the time elapsed) passes their time. Resetting the "
+				    "timer cancels steps still in progress. Set Text steps write to the timer's text "
+				    "source and support %time%, %name%, %target% and %percent%.",
+				    page));
 	layout->addSpacing(4);
 
 	// Owned by the dialog, so closing it cancels a test that's mid-Wait
 	m_testExecutor = new ActionExecutor(this);
 	connect(testBtn, &QPushButton::clicked, this, [this]() {
-		DisplayFormat timeOnly = SelectedFormat();
-		timeOnly.useFormatString = false;
 		m_testExecutor->execute(m_actionList->actions(), m_textSourceCombo->currentData().toString(),
-					FormatTimerDisplay(timeOnly, 0));
+					SampleValues(0));
 	});
 
 	m_actionList = new ActionListWidget(page);
 	layout->addWidget(m_actionList, 1);
 
 	connect(m_actionList, &ActionListWidget::stepsChanged, this, &TimerSettingsDialog::UpdateNavCounts);
+	connect(m_triggerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		&TimerSettingsDialog::SelectTrigger);
+	connect(addTriggerBtn, &QPushButton::clicked, this, [this]() {
+		m_timedGroups.append(TimedActionGroup());
+		m_triggerCombo->addItem(TriggerLabel(m_timedGroups.size()));
+		m_triggerCombo->setCurrentIndex(m_timedGroups.size());
+		UpdateNavCounts();
+	});
+	connect(m_removeTriggerBtn, &QPushButton::clicked, this, [this]() {
+		const int trigger = m_currentTrigger;
+		if (trigger == 0)
+			return;
+		// Switch to the end trigger without storing the removed
+		// group's steps back
+		m_currentTrigger = 0;
+		m_timedGroups.removeAt(trigger - 1);
+		m_actionList->setActions(m_endSteps);
+		{
+			QSignalBlocker blocker(m_triggerCombo);
+			m_triggerCombo->removeItem(trigger);
+			m_triggerCombo->setCurrentIndex(0);
+		}
+		SelectTrigger(0);
+		UpdateNavCounts();
+	});
+	connect(m_triggerTime, &QTimeEdit::timeChanged, this, [this](const QTime &time) {
+		if (m_currentTrigger == 0)
+			return;
+		m_timedGroups[m_currentTrigger - 1].atSeconds = QTime(0, 0).secsTo(time);
+		m_triggerCombo->setItemText(m_currentTrigger, TriggerLabel(m_currentTrigger));
+	});
 
 	return page;
+}
+
+QList<ActionStep> TimerSettingsDialog::StepsFor(int trigger) const
+{
+	if (trigger == m_currentTrigger)
+		return m_actionList->actions();
+	return trigger == 0 ? m_endSteps : m_timedGroups[trigger - 1].steps;
+}
+
+QString TimerSettingsDialog::TriggerLabel(int trigger) const
+{
+	if (trigger == 0)
+		return "When the timer ends";
+	DisplayFormat fmt;
+	fmt.autoUnits = true;
+	return QString("At %1 %2")
+		.arg(FormatTimerDisplay(fmt, m_timedGroups[trigger - 1].atSeconds * 1000LL),
+		     SelectedType() == TimerType::Stopwatch ? "elapsed" : "left");
+}
+
+void TimerSettingsDialog::RefreshTriggerLabels()
+{
+	for (int i = 0; i < m_triggerCombo->count(); i++)
+		m_triggerCombo->setItemText(i, TriggerLabel(i));
+}
+
+void TimerSettingsDialog::SelectTrigger(int trigger)
+{
+	if (trigger < 0)
+		return;
+	// Store the steps being edited, then show the selected trigger's
+	if (m_currentTrigger == 0)
+		m_endSteps = m_actionList->actions();
+	else if (m_currentTrigger <= m_timedGroups.size())
+		m_timedGroups[m_currentTrigger - 1].steps = m_actionList->actions();
+
+	m_currentTrigger = trigger;
+	m_actionList->setActions(trigger == 0 ? m_endSteps : m_timedGroups[trigger - 1].steps);
+	m_triggerTimeBox->setVisible(trigger > 0);
+	m_removeTriggerBtn->setEnabled(trigger > 0);
+	if (trigger > 0) {
+		QSignalBlocker blocker(m_triggerTime);
+		m_triggerTime->setTime(QTime(0, 0).addSecs(m_timedGroups[trigger - 1].atSeconds));
+	}
 }
 
 QWidget *TimerSettingsDialog::CreateHotkeysPage()
@@ -527,7 +654,19 @@ void TimerSettingsDialog::LoadFromData(const TimerData &data)
 		units = UnitsSeconds;
 	m_unitsCombo->setCurrentIndex(m_unitsCombo->findData(units));
 
-	m_actionList->setActions(data.endActions);
+	m_overtimeCheck->setChecked(data.overtime);
+	m_overtimePrefixEdit->setText(data.display.overtimePrefix);
+	m_fractionCombo->setCurrentIndex(qBound(0, data.display.fractionDigits, 2));
+
+	m_endSteps = data.endActions;
+	m_timedGroups = data.timedActions;
+	{
+		QSignalBlocker blocker(m_triggerCombo);
+		for (int i = 0; i <= m_timedGroups.size(); i++)
+			m_triggerCombo->addItem(TriggerLabel(i));
+	}
+	m_actionList->setActions(m_endSteps);
+	SelectTrigger(0);
 
 	m_addTimeEntries = data.addTimeHotkeys;
 	for (const auto &entry : m_addTimeEntries)
@@ -615,6 +754,8 @@ DisplayFormat TimerSettingsDialog::SelectedFormat() const
 	}
 
 	fmt.showLeadingZero = m_leadingZeroCheck->isChecked();
+	fmt.fractionDigits = m_fractionCombo->currentIndex();
+	fmt.overtimePrefix = m_overtimePrefixEdit->text();
 
 	const QString tpl = m_templateEdit->text();
 	fmt.useFormatString = !tpl.trimmed().isEmpty() && tpl != QStringLiteral("%time%");
@@ -646,6 +787,8 @@ void TimerSettingsDialog::UpdateTypeVisibility()
 	const TimerType type = SelectedType();
 	m_countdownBox->setVisible(type == TimerType::Countdown);
 	m_timeUntilBox->setVisible(type == TimerType::TimeUntil);
+	m_overtimeBox->setVisible(type != TimerType::Stopwatch);
+	RefreshTriggerLabels();
 	UpdatePreview();
 }
 
@@ -670,7 +813,7 @@ void TimerSettingsDialog::UpdatePreview()
 		break;
 	}
 
-	m_previewLabel->setText(FormatTimerDisplay(SelectedFormat(), ms));
+	m_previewLabel->setText(ExpandPlaceholders(TemplateText(SelectedFormat()), SampleValues(ms)));
 
 	const QString source = m_textSourceCombo->currentData().toString();
 	QString where = source.isEmpty() ? QString("Not shown on stream") : QString::fromUtf8("→ %1").arg(source);
@@ -680,12 +823,28 @@ void TimerSettingsDialog::UpdatePreview()
 	m_previewSourceLabel->setText(where);
 }
 
+QHash<QString, QString> TimerSettingsDialog::SampleValues(long long ms) const
+{
+	const TimerType type = SelectedType();
+	const QString name = m_nameEdit->text().trimmed();
+	return {{"time", FormatTimerDisplay(SelectedFormat(), ms)},
+		{"name", name.isEmpty() ? m_timerLabel : name},
+		{"target",
+		 type == TimerType::Stopwatch
+			 ? QString()
+			 : QLocale().toString(QDateTime::currentDateTime().addMSecs(ms).time(), QLocale::ShortFormat)},
+		{"percent", type == TimerType::Countdown ? QStringLiteral("0") : QString()}};
+}
+
 void TimerSettingsDialog::UpdateNavCounts()
 {
 	auto label = [](const QString &name, int count) {
 		return count > 0 ? QString("%1 (%2)").arg(name).arg(count) : name;
 	};
-	m_nav->item(FinishPage)->setText(label("On finish", m_actionList->actions().size()));
+	int steps = 0;
+	for (int i = 0; i < m_triggerCombo->count(); i++)
+		steps += StepsFor(i).size();
+	m_nav->item(FinishPage)->setText(label("Actions", steps));
 	m_nav->item(HotkeysPage)->setText(label("Hotkeys", m_addTimeEntries.size()));
 }
 
@@ -704,7 +863,11 @@ void TimerSettingsDialog::ApplyToData(TimerData &data) const
 	data.display = SelectedFormat();
 	data.finishedText = m_finishedTextEdit->text();
 
-	data.endActions = m_actionList->actions();
+	data.overtime = m_overtimeCheck->isChecked();
+	data.endActions = StepsFor(0);
+	data.timedActions = m_timedGroups;
+	for (int i = 0; i < m_timedGroups.size(); i++)
+		data.timedActions[i].steps = StepsFor(i + 1);
 
 	// Entries carry their registration names over so key bindings are
 	// kept; the caller re-registers every add-time hotkey afterwards.

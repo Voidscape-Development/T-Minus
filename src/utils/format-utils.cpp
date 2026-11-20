@@ -79,20 +79,29 @@ static QString BuildTimeString(const DisplayFormat &format, long long timeMs)
 	if (result.isEmpty())
 		result = "0";
 
+	if (fmt.fractionDigits > 0) {
+		const int fraction = static_cast<int>(timeMs % 1000) / (fmt.fractionDigits == 1 ? 100 : 10);
+		result += QString(".%1").arg(fraction, fmt.fractionDigits, 10, QChar('0'));
+	}
+
 	return result;
 }
 
 QString FormatTimerDisplay(const DisplayFormat &fmt, long long timeMs)
 {
-	QString timeStr = BuildTimeString(fmt, timeMs);
+	return timeMs < 0 ? fmt.overtimePrefix + BuildTimeString(fmt, -timeMs) : BuildTimeString(fmt, timeMs);
+}
 
-	if (fmt.useFormatString && !fmt.formatString.isEmpty()) {
-		QString output = fmt.formatString;
-		output.replace("%time%", timeStr);
-		return output;
-	}
+QString TemplateText(const DisplayFormat &fmt)
+{
+	return fmt.useFormatString && !fmt.formatString.isEmpty() ? fmt.formatString : QStringLiteral("%time%");
+}
 
-	return timeStr;
+QString ExpandPlaceholders(QString text, const QHash<QString, QString> &values)
+{
+	for (auto it = values.begin(); it != values.end(); ++it)
+		text.replace(QString("%%1%").arg(it.key()), it.value());
+	return text;
 }
 
 namespace {

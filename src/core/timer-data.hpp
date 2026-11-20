@@ -27,7 +27,28 @@ enum class ActionType {
 	Delay = 3,
 	TriggerGlobalHotkey = 4,
 	TriggerSourceHotkey = 5,
+	SourceVisibility = 6,
+	MediaControl = 7,
+	AudioControl = 8,
+	OutputControl = 9,
+	TimerControl = 10,
 };
+
+// Sub-options of the action types above, stored in ActionStep::mode
+enum class MediaMode { Play = 0, Pause, Restart, Stop };
+enum class AudioMode { Mute = 0, Unmute, ToggleMute, SetVolume };
+enum class OutputMode {
+	StartStreaming = 0,
+	StopStreaming,
+	StartRecording,
+	StopRecording,
+	PauseRecording,
+	ResumeRecording,
+	StartReplayBuffer,
+	StopReplayBuffer,
+	SaveReplayBuffer,
+};
+enum class TimerControlMode { Start = 0, Pause, Reset, AddTime };
 
 enum class Direction { Up, Down };
 
@@ -47,6 +68,10 @@ struct DisplayFormat {
 	bool showMinutes = true;
 	bool showSeconds = true;
 	bool showLeadingZero = true;
+	// Digits after the seconds: 0 none, 1 tenths, 2 hundredths
+	int fractionDigits = 0;
+	// Shown before the time once an overtime timer runs past zero
+	QString overtimePrefix = "-";
 	bool useFormatString = false;
 	QString formatString = "%time%";
 };
@@ -60,10 +85,19 @@ struct ActionStep {
 	// EnableFilter
 	QString filterSourceName;
 	QString filterName;
+	// Enable/disable for filters, show/hide for SourceVisibility
 	bool filterEnabled = true;
 
-	// SwitchScene
+	// SwitchScene, and the scene holding the source for SourceVisibility
 	QString sceneName;
+
+	// SourceVisibility, MediaControl and AudioControl: the source.
+	// TimerControl: the target timer's ID.
+	QString targetName;
+	// MediaMode, AudioMode, OutputMode or TimerControlMode
+	int mode = 0;
+	// AudioControl volume in dB; TimerControl seconds to add
+	double value = 0.0;
 
 	// Delay (milliseconds)
 	int delayMs = 1000;
@@ -74,6 +108,13 @@ struct ActionStep {
 	// TriggerSourceHotkey
 	QString sourceHotkeySourceName;
 	QString sourceHotkeyName;
+};
+
+// Steps that run when a running timer passes a point in time: the time
+// remaining for countdowns and time-until timers, time elapsed for stopwatches
+struct TimedActionGroup {
+	int atSeconds = 60;
+	QList<ActionStep> steps;
 };
 
 struct AddTimeHotkeyEntry {
@@ -103,6 +144,9 @@ struct TimerData {
 	// final time; empty keeps the time showing
 	QString finishedText;
 
+	// Countdown and time-until keep counting past zero instead of stopping
+	bool overtime = false;
+
 	// Stream behavior
 	bool startOnStreamStart = false;
 	bool resetOnStreamStart = false;
@@ -121,4 +165,5 @@ struct TimerData {
 
 	// End actions
 	QList<ActionStep> endActions;
+	QList<TimedActionGroup> timedActions;
 };

@@ -58,6 +58,10 @@ target_sources(
     src/core/timer-data.hpp
     src/core/action-executor.hpp
     src/core/action-executor.cpp
+    src/core/tminus-source.hpp
+    src/core/tminus-source.cpp
+    src/core/websocket-api.hpp
+    src/core/websocket-api.cpp
     src/utils/obs-utils.hpp
     src/utils/obs-utils.cpp
     src/utils/format-utils.hpp

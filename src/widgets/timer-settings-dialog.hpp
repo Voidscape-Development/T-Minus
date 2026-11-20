@@ -11,6 +11,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTableWidget>
+#include <QTimeEdit>
 
 #include "../core/timer-data.hpp"
 #include "action-list-widget.hpp"
@@ -47,6 +48,15 @@ private:
 	QDateTime SelectedTargetDateTime() const;
 	void SetTargetDateTime(const QDateTime &dt);
 	void SetDuration(int hours, int minutes, int seconds);
+	QHash<QString, QString> SampleValues(long long ms) const;
+
+	// Actions page: trigger 0 is "when the timer ends", trigger i > 0 is
+	// m_timedGroups[i - 1]. The list widget holds the selected trigger's
+	// steps; the others are kept in m_endSteps and m_timedGroups.
+	QList<ActionStep> StepsFor(int trigger) const;
+	QString TriggerLabel(int trigger) const;
+	void SelectTrigger(int trigger);
+	void RefreshTriggerLabels();
 
 private slots:
 	void UpdateTypeVisibility();
@@ -74,6 +84,9 @@ private:
 	QWidget *m_timeUntilBox;
 	DateTimePicker *m_targetPicker;
 	QComboBox *m_streamStartCombo;
+	QWidget *m_overtimeBox;
+	QCheckBox *m_overtimeCheck;
+	QLineEdit *m_overtimePrefixEdit;
 
 	// Output page
 	QComboBox *m_textSourceCombo;
@@ -85,9 +98,17 @@ private:
 	QCheckBox *m_showMinutesCheck;
 	QCheckBox *m_showSecondsCheck;
 	QCheckBox *m_leadingZeroCheck;
+	QComboBox *m_fractionCombo;
 	QLineEdit *m_finishedTextEdit;
 
-	// On finish page
+	// Actions page
+	QComboBox *m_triggerCombo;
+	QWidget *m_triggerTimeBox;
+	QTimeEdit *m_triggerTime;
+	QPushButton *m_removeTriggerBtn;
+	int m_currentTrigger = 0;
+	QList<ActionStep> m_endSteps;
+	QList<TimedActionGroup> m_timedGroups;
 	ActionListWidget *m_actionList;
 	ActionExecutor *m_testExecutor;
 
